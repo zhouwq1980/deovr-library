@@ -217,7 +217,7 @@ def parse_nfo(path: Path) -> NfoMeta:
     meta.genres = genres
 
     uids = _unique_ids(root)
-    # 番号优先：uniqueid type=num / general，再从标题提取
+    # 外部 ID 优先：uniqueid（imdb/tmdb/num 等），再从标题提取
     code = (
         uids.get("num")
         or uids.get("general")

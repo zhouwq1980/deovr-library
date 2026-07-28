@@ -355,7 +355,7 @@ class Database:
         if q.strip():
             token = " ".join(t for t in q.strip().replace('"', " ").split() if t)
             if token:
-                # Quote for FTS5 so '-' in codes like SSNI-077 is not NOT-operator
+                # Quote for FTS5 so '-' in codes like TT-1234 is not NOT-operator
                 fts_q = '"' + token.replace('"', "") + '"'
                 where.append(
                     """(

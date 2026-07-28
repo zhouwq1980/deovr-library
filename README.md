@@ -24,8 +24,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 python run_cli.py init
-python run_cli.py library add --path "/Users/z/Desktop/AV-2D" --name AV-2D --kind 2d
-python run_cli.py library add --path "/Users/z/Desktop/AV-VR" --name AV-VR --kind vr
+python run_cli.py library add --path "/path/to/Movies" --name Movies --kind 2d
+python run_cli.py library add --path "/path/to/Movies-VR" --name Movies-VR --kind vr
 python run_cli.py config --rewrite --rewrite-to 192.168.0.18
 python run_cli.py scan
 python run_cli.py serve --port 8765

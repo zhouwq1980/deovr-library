@@ -14,8 +14,8 @@ DEFAULTS: dict[str, Any] = {
     "host": "0.0.0.0",
     "port": 8765,
     "libraries": [
-        {"name": "AV-2D", "path": "/Users/z/Desktop/AV-2D", "kind": "2d"},
-        {"name": "AV-VR", "path": "/Users/z/Desktop/AV-VR", "kind": "vr"},
+        {"name": "Movies", "path": "/path/to/Movies", "kind": "2d"},
+        {"name": "Movies-VR", "path": "/path/to/Movies-VR", "kind": "vr"},
     ],
     "vr_screen_type": "dome",
     "vr_stereo_mode": "sbs",
@@ -28,7 +28,7 @@ DEFAULTS: dict[str, Any] = {
     # 自定义改地址：把 STRM 里的 127.0.0.1/localhost 改写成局域网 IP
     "rewrite_localhost_enabled": True,
     "rewrite_to": "192.168.0.18",
-    # 可选：服务端跟随跳转到 115 CDN（与改地址可同时开；改地址作用于仍为本机的链接）
+    # 可选：服务端跟随跳转到最终直链/CDN（与改地址可同时开；改地址作用于仍为本机的链接）
     "resolve_strm_redirects": False,
     "media_url_cache_ttl": 300,
     # 本地视频扩展名（另始终支持 .strm）

@@ -3,13 +3,13 @@
   "port": 8765,
   "libraries": [
     {
-      "name": "AV-2D",
-      "path": "/path/to/AV-2D",
+      "name": "Movies",
+      "path": "/path/to/Movies",
       "kind": "2d"
     },
     {
-      "name": "AV-VR",
-      "path": "/path/to/AV-VR",
+      "name": "Movies-VR",
+      "path": "/path/to/Movies-VR",
       "kind": "vr"
     }
   ],

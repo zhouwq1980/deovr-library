@@ -114,7 +114,7 @@ def resolve_media_url(
     except Exception:
         final = url
 
-    # 若最终仍是 loopback，改写成局域网 IP（头显可打到本机 12366）
+    # 若最终仍是 loopback，改写成局域网 IP（头显可访问本机媒体服务）
     if lan_host:
         final = rewrite_loopback(final, lan_host)
 
