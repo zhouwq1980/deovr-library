@@ -24,6 +24,8 @@ DEFAULTS: dict[str, Any] = {
     "default_resolution": 2160,
     "page_size": 48,
     "deovr_section_limit": 200,
+    "deovr_genre_tabs": 8,
+    "deovr_actor_tabs": 0,
     "thumb_max_width": 480,
     # 自定义改地址：把 STRM 里的 127.0.0.1/localhost 改写成局域网 IP
     "rewrite_localhost_enabled": True,

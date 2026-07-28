@@ -324,9 +324,9 @@ class Database:
                 ).fetchall()
             ]
             movie["genres"] = [
-                r["name"]
+                {"id": int(r["id"]), "name": r["name"]}
                 for r in conn.execute(
-                    """SELECT g.name FROM genres g
+                    """SELECT g.id, g.name FROM genres g
                        JOIN movie_genres mg ON mg.genre_id=g.id
                        WHERE mg.movie_id=? ORDER BY g.name""",
                     (movie_id,),
@@ -448,7 +448,12 @@ class Database:
     def facet_actors(self, limit: int = 200) -> list[dict[str, Any]]:
         with self.session() as conn:
             rows = conn.execute(
-                """SELECT a.name, COUNT(*) AS cnt
+                """SELECT a.id, a.name, COUNT(*) AS cnt,
+                          (SELECT m.id FROM movies m
+                           JOIN movie_actors ma2 ON ma2.movie_id=m.id
+                           WHERE ma2.actor_id=a.id AND m.poster_path IS NOT NULL
+                             AND m.poster_path != ''
+                           ORDER BY m.updated_at DESC LIMIT 1) AS sample_id
                    FROM actors a JOIN movie_actors ma ON ma.actor_id=a.id
                    GROUP BY a.id ORDER BY cnt DESC, a.name LIMIT ?""",
                 (limit,),
@@ -458,17 +463,37 @@ class Database:
     def facet_genres(self, limit: int = 200) -> list[dict[str, Any]]:
         with self.session() as conn:
             rows = conn.execute(
-                """SELECT g.name, COUNT(*) AS cnt
+                """SELECT g.id, g.name, COUNT(*) AS cnt,
+                          (SELECT m.id FROM movies m
+                           JOIN movie_genres mg2 ON mg2.movie_id=m.id
+                           WHERE mg2.genre_id=g.id AND m.poster_path IS NOT NULL
+                             AND m.poster_path != ''
+                           ORDER BY m.updated_at DESC LIMIT 1) AS sample_id
                    FROM genres g JOIN movie_genres mg ON mg.genre_id=g.id
                    GROUP BY g.id ORDER BY cnt DESC, g.name LIMIT ?""",
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def genre_name(self, genre_id: int) -> str | None:
+        with self.session() as conn:
+            row = conn.execute("SELECT name FROM genres WHERE id=?", (genre_id,)).fetchone()
+            return row["name"] if row else None
+
+    def actor_name(self, actor_id: int) -> str | None:
+        with self.session() as conn:
+            row = conn.execute("SELECT name FROM actors WHERE id=?", (actor_id,)).fetchone()
+            return row["name"] if row else None
+
     def facet_studios(self, limit: int = 200) -> list[dict[str, Any]]:
         with self.session() as conn:
             rows = conn.execute(
-                """SELECT studio AS name, COUNT(*) AS cnt FROM movies
+                """SELECT studio AS name, COUNT(*) AS cnt,
+                          (SELECT m.id FROM movies m
+                           WHERE m.studio=movies.studio AND m.poster_path IS NOT NULL
+                             AND m.poster_path != ''
+                           ORDER BY m.updated_at DESC LIMIT 1) AS sample_id
+                   FROM movies
                    WHERE studio IS NOT NULL AND studio != ''
                    GROUP BY studio ORDER BY cnt DESC, studio LIMIT ?""",
                 (limit,),

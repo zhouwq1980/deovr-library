@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>打开 DeoVR 片库</title>
+  <style>
+    :root {
+      --bg: #12141a;
+      --fg: #f2f3f5;
+      --muted: #9aa3b2;
+      --accent: #3d8bfd;
+      --card: #1c2030;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(1200px 600px at 20% -10%, #243056, var(--bg));
+      color: var(--fg);
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .box {
+      width: min(560px, 100%);
+      background: var(--card);
+      border-radius: 16px;
+      padding: 28px 24px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.35);
+    }
+    h1 { margin: 0 0 8px; font-size: 1.5rem; }
+    p { color: var(--muted); line-height: 1.6; margin: 0 0 14px; }
+    code {
+      display: block; word-break: break-all;
+      background: #0d1018; color: #c9d4ff;
+      padding: 10px 12px; border-radius: 8px; font-size: .85rem;
+      margin: 8px 0 16px;
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    a.btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 12px 18px; border-radius: 10px; text-decoration: none;
+      font-weight: 600; color: #fff; background: var(--accent);
+    }
+    a.btn.ghost { background: transparent; border: 1px solid #3a4560; color: var(--fg); }
+    ol { margin: 0 0 16px; padding-left: 1.2rem; color: var(--muted); }
+    li { margin: 6px 0; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>DeoVR 片库</h1>
+    <p>当前页面是浏览器预览。要进入 VR 片库界面，请用下面方式打开（不要只停留在 JSON 文本页）。</p>
+    <ol>
+      <li>点击「用 DeoVR 打开」；或</li>
+      <li>在 DeoVR 地址栏粘贴下方 JSON 地址后回车，等待进入 Selection Scene</li>
+    </ol>
+    <code>{{ json_url }}</code>
+    <div class="actions">
+      <a class="btn" href="deovr://{{ json_url }}">用 DeoVR 打开</a>
+      <a class="btn ghost" href="{{ json_url }}?format=json">查看 JSON</a>
+      <a class="btn ghost" href="/browse">网页片库</a>
+    </div>
+  </div>
+</body>
+</html>

@@ -23,7 +23,6 @@
     movies: document.getElementById("stat-movies"),
   };
 
-  // 服务端注入（路径路由 /genre/xxx，兼容 DeoVR 内置浏览器丢掉 ?query 的情况）
   const initFilters = window.__INIT_FILTERS__ || {};
   const params = new URLSearchParams(location.search);
 
@@ -61,7 +60,14 @@
       opt.textContent = `${it.name} (${it.cnt})`;
       select.appendChild(opt);
     }
-    if (preferred && [...select.options].some((o) => o.value === preferred)) {
+    if (preferred) {
+      // 精确匹配；若 facets 列表被截断，仍注入 option 保证筛选生效
+      if (![...select.options].some((o) => o.value === preferred)) {
+        const opt = document.createElement("option");
+        opt.value = preferred;
+        opt.textContent = preferred;
+        select.appendChild(opt);
+      }
       select.value = preferred;
     }
   }
@@ -88,14 +94,9 @@
   }
 
   function syncUrl() {
-    // 有路径筛选时保留路径，仅同步 query 到同页（避免 DeoVR 浏览器丢参）
+    // 始终留在 /browse，避免跳到 / 被当成首页
     const sp = query();
-    const path = location.pathname || "/";
-    const base =
-      path.startsWith("/genre/") || path.startsWith("/actor/") || path.startsWith("/kind/")
-        ? path
-        : "/";
-    history.replaceState(null, "", `${base}?${sp.toString()}`);
+    history.replaceState(null, "", `/browse?${sp.toString()}`);
   }
 
   function cardHtml(m) {

@@ -9,7 +9,7 @@
 <body>
   <header class="top">
     <div class="brand">
-      <a class="back" href="/">← 返回</a>
+      <a class="back" href="/browse">← 返回片库</a>
       <h1>{{ movie.code or movie.title }}</h1>
     </div>
     <div class="actions">
@@ -30,7 +30,7 @@
       <h2>{{ movie.title }}</h2>
       <dl>
         <dt>目录</dt><dd>{{ movie.library_name }} · {{ movie.kind|upper }}</dd>
-        {% if movie.studio %}<dt>片商</dt><dd>{{ movie.studio }}</dd>{% endif %}
+        {% if movie.studio %}<dt>片商</dt><dd><a href="/browse?studio={{ movie.studio | urlencode }}">{{ movie.studio }}</a></dd>{% endif %}
         {% if movie.year %}<dt>年份</dt><dd>{{ movie.year }}</dd>{% endif %}
         {% if movie.aired %}<dt>发售</dt><dd>{{ movie.aired }}</dd>{% endif %}
         {% if movie.runtime %}<dt>时长</dt><dd>{{ movie.runtime }} 分钟</dd>{% endif %}
@@ -39,7 +39,7 @@
         <dt>演员</dt>
         <dd class="tags">
           {% for a in movie.actors %}
-          <a href="/actor/{{ a | urlencode }}">{{ a }}</a>
+          <a href="/browse?actor={{ a | urlencode }}">{{ a }}</a>
           {% endfor %}
         </dd>
         {% endif %}
@@ -47,7 +47,7 @@
         <dt>类型</dt>
         <dd class="tags">
           {% for g in movie.genres %}
-          <a href="/genre/{{ g | urlencode }}">{{ g }}</a>
+          <a href="/browse?genre={{ g.name | urlencode }}">{{ g.name }}</a>
           {% endfor %}
         </dd>
         {% endif %}
@@ -55,7 +55,7 @@
       {% if movie.plot %}
       <p class="plot">{{ movie.plot }}</p>
       {% endif %}
-      <p class="hint">网页浏览请用 <code>{{ base }}/browse</code> · DeoVR 入口 <code>{{ base }}/deovr</code></p>
+      <p class="hint">网页浏览 <code>{{ base }}/browse</code> · DeoVR 请用 <code>{{ base }}/open</code></p>
     </div>
   </article>
 </body>
