@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.Python
+data/library.db
+data/library.db-*
+data/thumbs/
+data/config.json
+.DS_Store
+*.log
+.idea/
+.vscode/

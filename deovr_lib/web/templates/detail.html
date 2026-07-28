@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ movie.title }}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <a class="back" href="/">← 返回</a>
+      <h1>{{ movie.code or movie.title }}</h1>
+    </div>
+    <div class="actions">
+      <a class="btn" href="deovr://{{ base }}/deovr/{{ movie.id }}">用 DeoVR 打开</a>
+      <a class="btn ghost" href="/play/{{ movie.id }}" target="_blank">直接播放链接</a>
+    </div>
+  </header>
+
+  <article class="detail">
+    <div class="poster-wrap">
+      {% if movie.poster_path %}
+      <img src="/cover/{{ movie.id }}?full=1" alt="poster" />
+      {% else %}
+      <div class="no-poster">无封面</div>
+      {% endif %}
+    </div>
+    <div class="info">
+      <h2>{{ movie.title }}</h2>
+      <dl>
+        <dt>目录</dt><dd>{{ movie.library_name }} · {{ movie.kind|upper }}</dd>
+        {% if movie.studio %}<dt>片商</dt><dd>{{ movie.studio }}</dd>{% endif %}
+        {% if movie.year %}<dt>年份</dt><dd>{{ movie.year }}</dd>{% endif %}
+        {% if movie.aired %}<dt>发售</dt><dd>{{ movie.aired }}</dd>{% endif %}
+        {% if movie.runtime %}<dt>时长</dt><dd>{{ movie.runtime }} 分钟</dd>{% endif %}
+        {% if movie.rating %}<dt>评分</dt><dd>{{ movie.rating }}</dd>{% endif %}
+        {% if movie.actors %}
+        <dt>演员</dt>
+        <dd class="tags">
+          {% for a in movie.actors %}
+          <a href="/actor/{{ a | urlencode }}">{{ a }}</a>
+          {% endfor %}
+        </dd>
+        {% endif %}
+        {% if movie.genres %}
+        <dt>类型</dt>
+        <dd class="tags">
+          {% for g in movie.genres %}
+          <a href="/genre/{{ g | urlencode }}">{{ g }}</a>
+          {% endfor %}
+        </dd>
+        {% endif %}
+      </dl>
+      {% if movie.plot %}
+      <p class="plot">{{ movie.plot }}</p>
+      {% endif %}
+      <p class="hint">网页浏览请用 <code>{{ base }}/browse</code> · DeoVR 入口 <code>{{ base }}/deovr</code></p>
+    </div>
+  </article>
+</body>
+</html>

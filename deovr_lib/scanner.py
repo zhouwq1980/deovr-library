@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+import time
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from .db import Database
+from .nfo import (
+    DEFAULT_VIDEO_EXTS,
+    collect_media_files,
+    extract_code,
+    is_http_url,
+    parse_nfo,
+    prefer_nfo,
+    prefer_poster,
+    read_strm,
+)
+
+ProgressCb = Callable[[str, int, int], None]
+
+
+def _mtime(path: Path | None) -> float | None:
+    if not path or not path.exists():
+        return None
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def scan_library(
+    db: Database,
+    *,
+    name: str,
+    path: str,
+    kind: str = "2d",
+    force: bool = False,
+    video_exts: list[str] | None = None,
+    progress: ProgressCb | None = None,
+) -> dict[str, Any]:
+    root = Path(path)
+    if not root.is_dir():
+        raise FileNotFoundError(f"目录不存在: {path}")
+
+    lib_id = db.upsert_library(name, str(root), kind)
+    exts = tuple(video_exts) if video_exts else DEFAULT_VIDEO_EXTS
+    media_files = collect_media_files(root, exts)
+    total = len(media_files)
+    added = updated = skipped = 0
+    keep: set[str] = set()
+    t0 = time.time()
+    by_type = {"strm": 0, "local": 0}
+
+    existing: dict[str, tuple[int, float | None, float | None]] = {}
+    with db.session() as conn:
+        for r in conn.execute(
+            "SELECT id, strm_path, strm_mtime, nfo_mtime FROM movies WHERE library_id=?",
+            (lib_id,),
+        ).fetchall():
+            existing[r["strm_path"]] = (int(r["id"]), r["strm_mtime"], r["nfo_mtime"])
+
+    for i, media in enumerate(media_files, 1):
+        if progress and (i % 20 == 0 or i == total or i == 1):
+            progress(f"扫描 {name}: {media.parent.name}", i, total)
+
+        media_path = str(media.resolve())
+        keep.add(media_path)
+        folder = media.parent
+        media_mt = _mtime(media)
+        nfo_path = prefer_nfo(folder, media.stem)
+        nfo_mt = _mtime(nfo_path)
+
+        if not force and media_path in existing:
+            _, old_s, old_n = existing[media_path]
+            if old_s == media_mt and old_n == nfo_mt:
+                skipped += 1
+                continue
+
+        if media.suffix.lower() == ".strm":
+            url = read_strm(media)
+            by_type["strm"] += 1
+        else:
+            # 本地视频：播放时由 /play/{id} 直接 Range 输出文件
+            url = ""
+            by_type["local"] += 1
+
+        meta = parse_nfo(nfo_path) if nfo_path else None
+        title = (meta.title if meta and meta.title else media.stem)
+        code = (
+            meta.code
+            if meta and meta.code
+            else extract_code(media.stem) or extract_code(folder.name)
+        )
+        poster = prefer_poster(folder, media.stem)
+
+        actors = list(meta.actors) if meta else []
+        genres = list(meta.genres) if meta else []
+        if not actors and title:
+            parts = title.replace("】", " ").split()
+            if parts:
+                tail = parts[-1].strip("[]【】")
+                if 1 < len(tail) <= 20 and not extract_code(tail):
+                    actors = [tail]
+
+        is_new = media_path not in existing
+        db.upsert_movie(
+            library_id=lib_id,
+            code=code or "",
+            title=title,
+            plot=meta.plot if meta else "",
+            studio=meta.studio if meta else "",
+            year=meta.year if meta else None,
+            aired=meta.aired if meta else "",
+            rating=meta.rating if meta else None,
+            runtime=meta.runtime if meta else None,
+            kind=kind,
+            strm_path=media_path,
+            strm_url=url,
+            poster_path=str(poster) if poster else None,
+            nfo_path=str(nfo_path) if nfo_path else None,
+            nfo_mtime=nfo_mt,
+            strm_mtime=media_mt,
+            folder_name=folder.name,
+            actors=actors,
+            genres=genres,
+        )
+        if is_new:
+            added += 1
+        else:
+            updated += 1
+
+    removed = db.remove_missing(lib_id, keep)
+    return {
+        "library": name,
+        "path": str(root),
+        "kind": kind,
+        "total_media": total,
+        "total_strm": by_type["strm"],
+        "total_local": by_type["local"],
+        "added": added,
+        "updated": updated,
+        "skipped": skipped,
+        "removed": removed,
+        "elapsed": round(time.time() - t0, 2),
+    }
+
+
+def scan_all(
+    db: Database,
+    libraries: list[dict[str, Any]],
+    *,
+    force: bool = False,
+    video_exts: list[str] | None = None,
+    progress: ProgressCb | None = None,
+) -> list[dict[str, Any]]:
+    results = []
+    for lib in libraries:
+        if not lib.get("path"):
+            continue
+        results.append(
+            scan_library(
+                db,
+                name=lib.get("name") or Path(lib["path"]).name,
+                path=lib["path"],
+                kind=lib.get("kind") or "2d",
+                force=force,
+                video_exts=video_exts,
+                progress=progress,
+            )
+        )
+    return results

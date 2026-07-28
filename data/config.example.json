@@ -1,0 +1,32 @@
+{
+  "host": "0.0.0.0",
+  "port": 8765,
+  "libraries": [
+    {
+      "name": "AV-2D",
+      "path": "/path/to/AV-2D",
+      "kind": "2d"
+    },
+    {
+      "name": "AV-VR",
+      "path": "/path/to/AV-VR",
+      "kind": "vr"
+    }
+  ],
+  "vr_screen_type": "dome",
+  "vr_stereo_mode": "sbs",
+  "flat_screen_type": "flat",
+  "flat_stereo_mode": "off",
+  "default_resolution": 2160,
+  "page_size": 48,
+  "deovr_section_limit": 200,
+  "thumb_max_width": 480,
+  "rewrite_localhost_enabled": true,
+  "rewrite_to": "192.168.0.18",
+  "resolve_strm_redirects": false,
+  "media_url_cache_ttl": 300,
+  "video_extensions": [
+    ".mp4", ".mkv", ".avi", ".m4v", ".mov", ".wmv",
+    ".ts", ".m2ts", ".webm", ".flv", ".mpg", ".mpeg"
+  ]
+}

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DeoVR Library</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>DeoVR Library</h1>
+      <p class="sub">共 <strong id="stat-movies">{{ stats.movies }}</strong> 部 ·
+        演员 {{ stats.actors }} · 类型 {{ stats.genres }}</p>
+    </div>
+    <div class="actions">
+  <a class="btn ghost" href="/browse" title="网页片库">网页浏览</a>
+      <a class="btn ghost" href="/deovr" target="_blank" title="DeoVR 请打开此 JSON 地址">DeoVR 入口</a>
+      <button class="btn" id="btn-refresh-facets">刷新筛选</button>
+    </div>
+  </header>
+
+  <section class="filters">
+    <input id="q" type="search" placeholder="搜索番号 / 标题 / 演员 / 类型…" autocomplete="off" />
+    <select id="kind">
+      <option value="">全部类型</option>
+      <option value="2d">2D</option>
+      <option value="vr">VR</option>
+    </select>
+    <select id="library_id">
+      <option value="">全部目录</option>
+      {% for lib in libraries %}
+      <option value="{{ lib.id }}">{{ lib.name }}</option>
+      {% endfor %}
+    </select>
+    <select id="sort">
+      <option value="updated">最近更新</option>
+      <option value="aired">发售日</option>
+      <option value="year">年份</option>
+      <option value="rating">评分</option>
+      <option value="title">标题</option>
+      <option value="code">番号</option>
+    </select>
+    <select id="actor"><option value="">演员</option></select>
+    <select id="genre"><option value="">类型</option></select>
+    <select id="studio"><option value="">片商</option></select>
+  </section>
+
+  <div class="meta-bar">
+    <span id="result-info">加载中…</span>
+    <div class="pager">
+      <button class="btn ghost" id="prev">上一页</button>
+      <span id="page-label">1</span>
+      <button class="btn ghost" id="next">下一页</button>
+    </div>
+  </div>
+
+  <main id="grid" class="grid"></main>
+
+  <script>
+    window.__PAGE_SIZE__ = {{ page_size }};
+    window.__INIT_FILTERS__ = {{ init_filters | tojson | safe }};
+  </script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
