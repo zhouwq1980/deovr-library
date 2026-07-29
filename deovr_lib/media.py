@@ -10,19 +10,52 @@ _cache: dict[str, tuple[str, float]] = {}
 _lock = Lock()
 DEFAULT_TTL = 300  # CDN 链接缓存 5 分钟
 
+# 默认只改本机回环；STRM 里若写了旧局域网 IP，请在 config.rewrite_from 里追加
+DEFAULT_REWRITE_FROM = ("127.0.0.1", "localhost", "::1", "0.0.0.0")
 
-def rewrite_loopback(url: str, lan_host: str) -> str:
-    """把 127.0.0.1/localhost 换成局域网 IP，供头显访问本机播放服务。"""
+
+def normalize_rewrite_from(value: object | None) -> list[str]:
+    """支持 list / 逗号分隔字符串。"""
+    if value is None:
+        return list(DEFAULT_REWRITE_FROM)
+    items: list[str] = []
+    if isinstance(value, (list, tuple, set)):
+        raw = list(value)
+    else:
+        raw = str(value).replace(";", ",").split(",")
+    for x in raw:
+        h = str(x).strip().lower()
+        if h:
+            items.append(h)
+    # 始终保留回环，避免只配了旧 IP 却漏掉 127.0.0.1
+    for h in DEFAULT_REWRITE_FROM:
+        if h not in items:
+            items.append(h)
+    return items
+
+
+def rewrite_loopback(
+    url: str,
+    lan_host: str,
+    rewrite_from: object | None = None,
+) -> str:
+    """把 STRM 里的源主机（默认 127.0.0.1/localhost，可含旧局域网 IP）改成 rewrite_to。"""
     if not url or not lan_host:
         return url
     p = urlparse(url)
     host = (p.hostname or "").lower()
-    if host in ("127.0.0.1", "localhost", "::1"):
-        netloc = lan_host
-        if p.port:
-            netloc = f"{lan_host}:{p.port}"
-        return urlunparse(p._replace(netloc=netloc))
-    return url
+    if not host:
+        return url
+    sources = set(normalize_rewrite_from(rewrite_from))
+    target = lan_host.strip().lower()
+    if host == target:
+        return url
+    if host not in sources:
+        return url
+    netloc = lan_host.strip()
+    if p.port:
+        netloc = f"{netloc}:{p.port}"
+    return urlunparse(p._replace(netloc=netloc))
 
 
 def _follow_once(url: str, timeout: float = 10.0) -> tuple[str, int | None]:
@@ -45,17 +78,19 @@ def resolve_media_url(
     url: str,
     *,
     lan_host: str = "",
+    rewrite_from: object | None = None,
     ttl: int = DEFAULT_TTL,
     use_cache: bool = True,
 ) -> str:
     """
     服务端跟随 STRM 跳转，尽量拿到最终可播地址（如 115 CDN https）。
-    避免头显跟随到 127.0.0.1。
+    避免头显跟随到 127.0.0.1 / 旧局域网 IP。
     """
     if not url:
         return url
 
-    cache_key = url
+    # 缓存键含改写目标，避免换 IP 后仍命中旧结果
+    cache_key = f"{url}|{lan_host}|{','.join(normalize_rewrite_from(rewrite_from))}"
     now = time.time()
     if use_cache:
         with _lock:
@@ -114,9 +149,8 @@ def resolve_media_url(
     except Exception:
         final = url
 
-    # 若最终仍是 loopback，改写成局域网 IP（头显可访问本机媒体服务）
     if lan_host:
-        final = rewrite_loopback(final, lan_host)
+        final = rewrite_loopback(final, lan_host, rewrite_from=rewrite_from)
 
     if use_cache and final:
         with _lock:

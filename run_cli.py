@@ -40,6 +40,11 @@ def _apply_rewrite_args(cfg: dict, args: argparse.Namespace) -> dict:
     if getattr(args, "rewrite_to", None):
         cfg["rewrite_to"] = args.rewrite_to.strip()
         cfg["rewrite_localhost_enabled"] = True
+    if getattr(args, "rewrite_from", None):
+        from deovr_lib.media import normalize_rewrite_from
+
+        cfg["rewrite_from"] = normalize_rewrite_from(args.rewrite_from)
+        cfg["rewrite_localhost_enabled"] = True
     if getattr(args, "resolve_cdn", None) is True:
         cfg["resolve_strm_redirects"] = True
     if getattr(args, "no_resolve_cdn", None) is True:
@@ -48,11 +53,16 @@ def _apply_rewrite_args(cfg: dict, args: argparse.Namespace) -> dict:
 
 
 def _add_rewrite_args(p: argparse.ArgumentParser) -> None:
-    g = p.add_argument_group("自定义改地址（STRM 127.0.0.1 → 局域网 IP）")
+    g = p.add_argument_group("自定义改地址（STRM 源主机 → 局域网 IP）")
     g.add_argument("--rewrite", action="store_true", help="启用改写")
     g.add_argument("--no-rewrite", action="store_true", help="关闭改写")
     g.add_argument("--rewrite-to", metavar="IP", help="目标 IP，如 192.168.0.18")
-    g.add_argument("--resolve-cdn", action="store_true", help="同时解析到 115 CDN")
+    g.add_argument(
+        "--rewrite-from",
+        metavar="HOSTS",
+        help="要替换的源主机，逗号分隔，如 127.0.0.1,192.168.0.16",
+    )
+    g.add_argument("--resolve-cdn", action="store_true", help="同时解析到 CDN/直链")
     g.add_argument("--no-resolve-cdn", action="store_true", help="关闭 CDN 解析")
 
 
@@ -146,6 +156,7 @@ def cmd_config(args: argparse.Namespace) -> int:
     before = (
         cfg.get("rewrite_localhost_enabled"),
         cfg.get("rewrite_to"),
+        tuple(cfg.get("rewrite_from") or []),
         cfg.get("resolve_strm_redirects"),
         cfg.get("host"),
         cfg.get("port"),
@@ -158,6 +169,7 @@ def cmd_config(args: argparse.Namespace) -> int:
     after = (
         cfg.get("rewrite_localhost_enabled"),
         cfg.get("rewrite_to"),
+        tuple(cfg.get("rewrite_from") or []),
         cfg.get("resolve_strm_redirects"),
         cfg.get("host"),
         cfg.get("port"),
@@ -167,6 +179,7 @@ def cmd_config(args: argparse.Namespace) -> int:
 
     print("rewrite_localhost_enabled:", cfg.get("rewrite_localhost_enabled"))
     print("rewrite_to:", cfg.get("rewrite_to"))
+    print("rewrite_from:", cfg.get("rewrite_from"))
     print("resolve_strm_redirects:", cfg.get("resolve_strm_redirects"))
     print("host:", cfg.get("host"))
     print("port:", cfg.get("port"))
@@ -344,6 +357,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
         rewrite=True,
         no_rewrite=False,
         rewrite_to=cfg.get("rewrite_to"),
+        rewrite_from=None,
         resolve_cdn=False,
         no_resolve_cdn=False,
     )

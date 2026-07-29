@@ -14,7 +14,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import load_config
 from .db import Database
-from .media import resolve_media_url, rewrite_loopback
+from .media import normalize_rewrite_from, resolve_media_url, rewrite_loopback
 from .nfo import is_http_url, media_content_type, read_strm
 from .thumbs import ensure_thumb
 
@@ -174,15 +174,17 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         except Exception:
             cfg_l = app.state.cfg
         target = rewrite_target(request)
+        from_hosts = cfg_l.get("rewrite_from")
         url = raw
         if cfg_l.get("resolve_strm_redirects", False):
             url = resolve_media_url(
                 raw,
                 lan_host=target,
+                rewrite_from=from_hosts,
                 ttl=int(cfg_l.get("media_url_cache_ttl") or 300),
             )
         if cfg_l.get("rewrite_localhost_enabled", True) and target:
-            url = rewrite_loopback(url, target)
+            url = rewrite_loopback(url, target, rewrite_from=from_hosts)
         return url
 
     def video_detail(request: Request, movie: dict[str, Any]) -> dict[str, Any]:
@@ -573,15 +575,17 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         except Exception:
             cfg_l = app.state.cfg
         target = rewrite_target(request)
+        from_hosts = cfg_l.get("rewrite_from")
         url = raw
         if cfg_l.get("resolve_strm_redirects", False):
             url = resolve_media_url(
                 url,
                 lan_host=target,
+                rewrite_from=from_hosts,
                 ttl=int(cfg_l.get("media_url_cache_ttl") or 300),
             )
         if cfg_l.get("rewrite_localhost_enabled", True) and target:
-            url = rewrite_loopback(url, target)
+            url = rewrite_loopback(url, target, rewrite_from=from_hosts)
         return RedirectResponse(url=url, status_code=302)
 
     @app.get("/api/resolve/{movie_id}")
@@ -596,6 +600,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             "final": final,
             "rewrite_enabled": bool(app.state.cfg.get("rewrite_localhost_enabled", True)),
             "rewrite_to": rewrite_target(request),
+            "rewrite_from": normalize_rewrite_from(app.state.cfg.get("rewrite_from")),
             "resolve_strm_redirects": bool(app.state.cfg.get("resolve_strm_redirects", False)),
         }
 
