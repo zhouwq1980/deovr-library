@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from deovr_lib.config import (
+    APP_DIR,
     DEFAULT_CONFIG,
     DEFAULT_DB,
     DEFAULTS,
@@ -298,6 +299,57 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_demo(args: argparse.Namespace) -> int:
+    """用仓库自带 testdata 搭一套空白可测环境（会 --reset）。"""
+    testdata = APP_DIR / "testdata"
+    movies = testdata / "Movies"
+    movies_vr = testdata / "Movies-VR"
+    if not movies.is_dir() or not movies_vr.is_dir():
+        print(f"缺少示例数据目录: {testdata}")
+        print("请确认仓库含 testdata/Movies 与 testdata/Movies-VR")
+        return 1
+
+    # 复用 init --reset
+    ns = argparse.Namespace(reset=True)
+    cmd_init(ns)
+
+    cfg = load_config()
+    cfg["libraries"] = [
+        {"name": "Movies", "path": str(movies.resolve()), "kind": "2d"},
+        {"name": "Movies-VR", "path": str(movies_vr.resolve()), "kind": "vr"},
+    ]
+    ip = _detect_ip()
+    if ip:
+        cfg["rewrite_to"] = ip
+        cfg["rewrite_localhost_enabled"] = True
+    save_config(cfg)
+
+    scan_ns = argparse.Namespace(path=None, name="", kind="2d", force=True)
+    code = cmd_scan(scan_ns)
+    if code != 0:
+        return code
+
+    print()
+    print("Demo 就绪。可启动：")
+    print("  python run_cli.py serve --port 8765")
+    print("网页: http://127.0.0.1:8765/browse")
+    print("DeoVR JSON: http://127.0.0.1:8765/deovr?format=json")
+    if not args.serve:
+        return 0
+
+    serve_ns = argparse.Namespace(
+        host=None,
+        port=args.port,
+        save_config=False,
+        rewrite=True,
+        no_rewrite=False,
+        rewrite_to=cfg.get("rewrite_to"),
+        resolve_cdn=False,
+        no_resolve_cdn=False,
+    )
+    return cmd_serve(serve_ns)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description="DeoVR Library CLI（支持 .strm 与本地视频 + Emby/Jellyfin NFO）"
@@ -348,6 +400,11 @@ def main(argv: list[str] | None = None) -> int:
         help="删除 config.json / library.db / thumbs，写入全新空配置",
     )
     i.set_defaults(func=cmd_init)
+
+    d = sub.add_parser("demo", help="用 testdata 重置并扫描空白示例片库（适合 GitHub 测试）")
+    d.add_argument("--serve", action="store_true", help="扫描后直接启动服务")
+    d.add_argument("--port", type=int, default=8765)
+    d.set_defaults(func=cmd_demo)
 
     args = p.parse_args(argv)
     return args.func(args)

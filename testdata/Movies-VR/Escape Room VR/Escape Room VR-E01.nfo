@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<movie>
+  <title>Escape Room VR-E01</title>
+  <plot>Demo sample for DeoVR Library blank project testing. Kind=vr.</plot>
+  <studio>Demo Studio</studio>
+  <year>2024</year>
+  <premiered>2024-01-01</premiered>
+  <runtime>90</runtime>
+  <rating>8.0</rating>
+  <uniqueid type="imdb">tt20240001</uniqueid>
+  <genre>Adventure</genre>
+  <tag>Demo</tag>
+  <actor><name>Demo Actor</name></actor>
+</movie>

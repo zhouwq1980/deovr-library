@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<movie>
+  <title>The Matrix (1999)</title>
+  <plot>Demo sample for DeoVR Library blank project testing. Kind=2d.</plot>
+  <studio>Warner Bros.</studio>
+  <year>1999</year>
+  <premiered>1999-01-01</premiered>
+  <runtime>90</runtime>
+  <rating>8.0</rating>
+  <uniqueid type="imdb">tt19990001</uniqueid>
+  <genre>Sci-Fi</genre>
+  <tag>Demo</tag>
+  <actor><name>Keanu Reeves</name></actor>
+</movie>

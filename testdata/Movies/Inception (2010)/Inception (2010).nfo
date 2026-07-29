@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<movie>
+  <title>Inception (2010)</title>
+  <plot>Demo sample for DeoVR Library blank project testing. Kind=2d.</plot>
+  <studio>Christopher Nolan</studio>
+  <year>2010</year>
+  <premiered>2010-01-01</premiered>
+  <runtime>90</runtime>
+  <rating>8.0</rating>
+  <uniqueid type="imdb">tt20100001</uniqueid>
+  <genre>Action</genre>
+  <tag>Demo</tag>
+  <actor><name>Leonardo DiCaprio</name></actor>
+</movie>
