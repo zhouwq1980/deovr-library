@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .db import Database
 from .nfo import (
