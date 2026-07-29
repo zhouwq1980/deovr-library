@@ -8,7 +8,14 @@ import socket
 import sys
 from pathlib import Path
 
-from deovr_lib.config import DEFAULT_DB, load_config, save_config
+from deovr_lib.config import (
+    DEFAULT_CONFIG,
+    DEFAULT_DB,
+    DEFAULTS,
+    THUMB_CACHE,
+    load_config,
+    save_config,
+)
 from deovr_lib.db import Database
 from deovr_lib.scanner import scan_all
 
@@ -216,6 +223,50 @@ def cmd_library(args: argparse.Namespace) -> int:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    reset = bool(getattr(args, "reset", False) or getattr(args, "force", False))
+
+    if reset:
+        # 清空配置、数据库、封面缓存，回到全新状态
+        removed: list[str] = []
+        for p in (
+            DEFAULT_CONFIG,
+            DEFAULT_DB,
+            Path(str(DEFAULT_DB) + "-wal"),
+            Path(str(DEFAULT_DB) + "-shm"),
+        ):
+            if p.exists():
+                p.unlink()
+                removed.append(p.name)
+        if THUMB_CACHE.is_dir():
+            n = 0
+            for f in THUMB_CACHE.glob("*"):
+                if f.is_file():
+                    f.unlink()
+                    n += 1
+            removed.append(f"thumbs/* ({n} files)")
+
+        cfg = dict(DEFAULTS)
+        ip = _detect_ip()
+        if ip:
+            cfg["rewrite_to"] = ip
+        cfg["libraries"] = []
+        save_config(cfg)
+        # 重建空库
+        Database(DEFAULT_DB)
+        print("已重置全部本地数据")
+        for x in removed:
+            print(f"  删除: {x}")
+        print(f"  新配置: {DEFAULT_CONFIG}")
+        print(f"  新数据库: {DEFAULT_DB}")
+        print("rewrite_to:", cfg.get("rewrite_to"))
+        print("libraries: 0")
+        print()
+        print("下一步：")
+        print('  python run_cli.py library add --path "/本机真实目录" --name AV-2D --kind 2d')
+        print("  python run_cli.py scan --force")
+        print("  python run_cli.py serve --rewrite --rewrite-to <局域网IP>")
+        return 0
+
     cfg = load_config()
     ip = _detect_ip()
     if ip and not cfg.get("rewrite_to"):
@@ -233,10 +284,13 @@ def cmd_init(args: argparse.Namespace) -> int:
     if cleaned != libs:
         cfg["libraries"] = cleaned
     save_config(cfg)
-    print("已写入默认配置")
+    print("已写入默认配置（未清空片库数据库）")
     print("rewrite_to:", cfg.get("rewrite_to"))
     print("libraries:", len(cfg.get("libraries") or []))
     print("video_extensions:", ", ".join(cfg.get("video_extensions") or []))
+    print()
+    print("若要清空全部旧配置/数据库，请用：")
+    print("  python run_cli.py init --reset")
     print()
     print("下一步添加真实片库目录，例如：")
     print('  python run_cli.py library add --path "/Users/你/影片" --name Movies --kind 2d')
@@ -285,7 +339,14 @@ def main(argv: list[str] | None = None) -> int:
     lr.add_argument("name", help="目录 name 或 path")
     lr.set_defaults(func=cmd_library, action="remove")
 
-    i = sub.add_parser("init", help="写入默认配置")
+    i = sub.add_parser("init", help="写入默认配置；--reset 清空全部本地数据后重建")
+    i.add_argument(
+        "--reset",
+        "--force",
+        dest="reset",
+        action="store_true",
+        help="删除 config.json / library.db / thumbs，写入全新空配置",
+    )
     i.set_defaults(func=cmd_init)
 
     args = p.parse_args(argv)
