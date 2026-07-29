@@ -76,7 +76,6 @@ CREATE INDEX IF NOT EXISTS idx_movie_genres_genre ON movie_genres(genre_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS movies_fts USING fts5(
     title, plot, code, studio, actors, genres,
-    content='',
     tokenize='trigram'
 );
 """
@@ -111,47 +110,118 @@ class Database:
             conn.executescript(SCHEMA)
             self._ensure_fts(conn)
 
+    def _fts_sql_ok(self, sql: str) -> bool:
+        """普通（非 contentless）+ trigram 才允许 DELETE/UPDATE。"""
+        s = (sql or "").lower().replace(" ", "")
+        if "trigram" not in (sql or "").lower():
+            return False
+        if "content=''" in s or 'content=""' in s or "contentless" in s:
+            return False
+        return True
+
+    def _rebuild_fts(self, conn: sqlite3.Connection) -> None:
+        conn.execute("DROP TABLE IF EXISTS movies_fts")
+        conn.execute(
+            """CREATE VIRTUAL TABLE movies_fts USING fts5(
+                title, plot, code, studio, actors, genres,
+                tokenize='trigram'
+            )"""
+        )
+        rows = conn.execute(
+            """SELECT m.id, m.title, m.plot, m.code, m.studio,
+                      (SELECT group_concat(a.name, ' ') FROM actors a
+                       JOIN movie_actors ma ON ma.actor_id=a.id WHERE ma.movie_id=m.id) AS actors,
+                      (SELECT group_concat(g.name, ' ') FROM genres g
+                       JOIN movie_genres mg ON mg.genre_id=g.id WHERE mg.movie_id=m.id) AS genres
+               FROM movies m"""
+        ).fetchall()
+        for r in rows:
+            conn.execute(
+                """INSERT INTO movies_fts(rowid, title, plot, code, studio, actors, genres)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (
+                    r["id"],
+                    r["title"] or "",
+                    r["plot"] or "",
+                    r["code"] or "",
+                    r["studio"] or "",
+                    r["actors"] or "",
+                    r["genres"] or "",
+                ),
+            )
+
     def _ensure_fts(self, conn: sqlite3.Connection) -> None:
-        """Ensure FTS uses trigram (CJK substring); rebuild if needed."""
+        """Ensure FTS is updatable trigram index; migrate old contentless tables."""
         try:
             row = conn.execute(
                 "SELECT sql FROM sqlite_master WHERE name='movies_fts'"
             ).fetchone()
             sql = (row[0] or "") if row else ""
-            if "trigram" in sql.lower():
+            if sql and self._fts_sql_ok(sql):
                 return
-            conn.execute("DROP TABLE IF EXISTS movies_fts")
-            conn.execute(
-                """CREATE VIRTUAL TABLE movies_fts USING fts5(
-                    title, plot, code, studio, actors, genres,
-                    content='',
-                    tokenize='trigram'
-                )"""
-            )
-            rows = conn.execute(
-                """SELECT m.id, m.title, m.plot, m.code, m.studio,
-                          (SELECT group_concat(a.name, ' ') FROM actors a
-                           JOIN movie_actors ma ON ma.actor_id=a.id WHERE ma.movie_id=m.id) AS actors,
-                          (SELECT group_concat(g.name, ' ') FROM genres g
-                           JOIN movie_genres mg ON mg.genre_id=g.id WHERE mg.movie_id=m.id) AS genres
-                   FROM movies m"""
-            ).fetchall()
-            for r in rows:
-                conn.execute(
-                    """INSERT INTO movies_fts(rowid, title, plot, code, studio, actors, genres)
-                       VALUES(?,?,?,?,?,?,?)""",
-                    (
-                        r["id"],
-                        r["title"] or "",
-                        r["plot"] or "",
-                        r["code"] or "",
-                        r["studio"] or "",
-                        r["actors"] or "",
-                        r["genres"] or "",
-                    ),
-                )
+            self._rebuild_fts(conn)
         except Exception:
+            try:
+                self._rebuild_fts(conn)
+            except Exception:
+                pass
+
+    def _fts_delete(self, conn: sqlite3.Connection, mid: int) -> None:
+        """Delete FTS row; compatible with legacy contentless tables."""
+        try:
+            conn.execute("DELETE FROM movies_fts WHERE rowid=?", (mid,))
+            return
+        except sqlite3.OperationalError:
             pass
+        # contentless FTS5: special delete command
+        try:
+            conn.execute(
+                "INSERT INTO movies_fts(movies_fts, rowid) VALUES('delete', ?)",
+                (mid,),
+            )
+            return
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute(
+                """INSERT INTO movies_fts(
+                       movies_fts, rowid, title, plot, code, studio, actors, genres
+                   ) VALUES('delete', ?, '', '', '', '', '', '')""",
+                (mid,),
+            )
+        except sqlite3.OperationalError:
+            # 彻底重建为可更新索引后再删
+            self._rebuild_fts(conn)
+            conn.execute("DELETE FROM movies_fts WHERE rowid=?", (mid,))
+
+    def _fts_upsert(
+        self,
+        conn: sqlite3.Connection,
+        mid: int,
+        *,
+        title: str,
+        plot: str,
+        code: str,
+        studio: str,
+        actors: str,
+        genres: str,
+    ) -> None:
+        self._fts_delete(conn, mid)
+        try:
+            conn.execute(
+                """INSERT INTO movies_fts(rowid, title, plot, code, studio, actors, genres)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (mid, title, plot, code, studio, actors, genres),
+            )
+        except sqlite3.IntegrityError:
+            # rowid 仍在：重建后重试
+            self._rebuild_fts(conn)
+            conn.execute("DELETE FROM movies_fts WHERE rowid=?", (mid,))
+            conn.execute(
+                """INSERT INTO movies_fts(rowid, title, plot, code, studio, actors, genres)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (mid, title, plot, code, studio, actors, genres),
+            )
 
     def upsert_library(self, name: str, path: str, kind: str = "2d") -> int:
         with self.session() as conn:
@@ -236,7 +306,6 @@ class Database:
                 )
                 conn.execute("DELETE FROM movie_actors WHERE movie_id=?", (mid,))
                 conn.execute("DELETE FROM movie_genres WHERE movie_id=?", (mid,))
-                conn.execute("DELETE FROM movies_fts WHERE rowid=?", (mid,))
             else:
                 cur = conn.execute(
                     """INSERT INTO movies(
@@ -269,18 +338,15 @@ class Database:
                     (mid, gid),
                 )
 
-            conn.execute(
-                """INSERT INTO movies_fts(rowid, title, plot, code, studio, actors, genres)
-                   VALUES(?,?,?,?,?,?,?)""",
-                (
-                    mid,
-                    title or "",
-                    plot or "",
-                    code or "",
-                    studio or "",
-                    " ".join(actors),
-                    " ".join(genres),
-                ),
+            self._fts_upsert(
+                conn,
+                mid,
+                title=title or "",
+                plot=plot or "",
+                code=code or "",
+                studio=studio or "",
+                actors=" ".join(actors),
+                genres=" ".join(genres),
             )
             return mid
 
@@ -294,8 +360,8 @@ class Database:
             for r in rows:
                 if r["strm_path"] not in keep_paths:
                     mid = int(r["id"])
+                    self._fts_delete(conn, mid)
                     conn.execute("DELETE FROM movies WHERE id=?", (mid,))
-                    conn.execute("DELETE FROM movies_fts WHERE rowid=?", (mid,))
                     removed += 1
             return removed
 
