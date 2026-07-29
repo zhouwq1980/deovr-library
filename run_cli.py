@@ -54,8 +54,20 @@ def cmd_scan(args: argparse.Namespace) -> int:
     libs = cfg.get("libraries") or []
     if args.path:
         libs = [{"name": args.name or Path(args.path).name, "path": args.path, "kind": args.kind}]
+    # 过滤占位路径
+    libs = [
+        x
+        for x in libs
+        if isinstance(x, dict)
+        and x.get("path")
+        and not str(x["path"]).startswith("/path/to/")
+    ]
     if not libs:
-        print("无目录可扫描。请先: python run_cli.py library add --path ...")
+        print("无有效目录可扫描。")
+        print("请先添加真实路径，例如：")
+        print('  python run_cli.py library add --path "/Users/你/影片" --name Movies --kind 2d')
+        print("  python run_cli.py library list")
+        print("  python run_cli.py scan --force")
         return 1
 
     video_exts = cfg.get("video_extensions")
@@ -67,14 +79,19 @@ def cmd_scan(args: argparse.Namespace) -> int:
         db, libs, force=args.force, video_exts=video_exts, progress=progress
     )
     print()
+    ok = 0
     for r in results:
+        if r.get("error"):
+            print(f"{r['library']}: 失败 — {r['error']}")
+            continue
+        ok += 1
         print(
             f"{r['library']}: media={r.get('total_media', r.get('total_strm', 0))} "
             f"(strm={r.get('total_strm', 0)} local={r.get('total_local', 0)}) "
             f"+{r['added']} ~{r['updated']} skip={r['skipped']} -{r['removed']} ({r['elapsed']}s)"
         )
     print("总计影片:", db.movie_count())
-    return 0
+    return 0 if ok else 1
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -204,10 +221,26 @@ def cmd_init(args: argparse.Namespace) -> int:
     if ip and not cfg.get("rewrite_to"):
         cfg["rewrite_to"] = ip
     cfg.setdefault("rewrite_localhost_enabled", True)
+    # 清掉示例占位目录，避免 scan 去扫 /path/to/Movies
+    libs = cfg.get("libraries") or []
+    cleaned = [
+        x
+        for x in libs
+        if isinstance(x, dict)
+        and x.get("path")
+        and not str(x["path"]).startswith("/path/to/")
+    ]
+    if cleaned != libs:
+        cfg["libraries"] = cleaned
     save_config(cfg)
     print("已写入默认配置")
     print("rewrite_to:", cfg.get("rewrite_to"))
+    print("libraries:", len(cfg.get("libraries") or []))
     print("video_extensions:", ", ".join(cfg.get("video_extensions") or []))
+    print()
+    print("下一步添加真实片库目录，例如：")
+    print('  python run_cli.py library add --path "/Users/你/影片" --name Movies --kind 2d')
+    print("  python run_cli.py scan")
     return 0
 
 

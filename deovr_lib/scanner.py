@@ -156,13 +156,34 @@ def scan_all(
 ) -> list[dict[str, Any]]:
     results = []
     for lib in libraries:
-        if not lib.get("path"):
+        path = (lib.get("path") or "").strip()
+        if not path:
+            continue
+        name = lib.get("name") or Path(path).name
+        # 跳过示例占位路径 / 不存在目录，避免整次扫描中断
+        if path.startswith("/path/to/") or not Path(path).is_dir():
+            print(f"\n跳过「{name}」: 目录不存在 → {path}")
+            print("  请先: python run_cli.py library add --path 真实目录 --name 名称 --kind 2d|vr")
+            results.append(
+                {
+                    "library": name,
+                    "total_media": 0,
+                    "total_strm": 0,
+                    "total_local": 0,
+                    "added": 0,
+                    "updated": 0,
+                    "skipped": 0,
+                    "removed": 0,
+                    "elapsed": 0,
+                    "error": f"目录不存在: {path}",
+                }
+            )
             continue
         results.append(
             scan_library(
                 db,
-                name=lib.get("name") or Path(lib["path"]).name,
-                path=lib["path"],
+                name=name,
+                path=path,
                 kind=lib.get("kind") or "2d",
                 force=force,
                 video_exts=video_exts,

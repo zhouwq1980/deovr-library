@@ -13,10 +13,7 @@ THUMB_CACHE = DATA_DIR / "thumbs"
 DEFAULTS: dict[str, Any] = {
     "host": "0.0.0.0",
     "port": 8765,
-    "libraries": [
-        {"name": "Movies", "path": "/path/to/Movies", "kind": "2d"},
-        {"name": "Movies-VR", "path": "/path/to/Movies-VR", "kind": "vr"},
-    ],
+    "libraries": [],
     "vr_screen_type": "dome",
     "vr_stereo_mode": "sbs",
     "flat_screen_type": "flat",
