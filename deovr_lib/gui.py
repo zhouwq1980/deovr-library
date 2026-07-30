@@ -13,6 +13,7 @@ from tkinter import (
     VERTICAL,
     BooleanVar,
     Button,
+    Canvas,
     Checkbutton,
     Entry,
     Frame,
@@ -33,15 +34,18 @@ from .config import DEFAULT_CONFIG, DEFAULT_DB, DEFAULTS, THUMB_CACHE, load_conf
 from .db import Database
 from .scanner import scan_all
 
-# 高对比，避免 macOS 白底白字 / 输入框「隐形」
-BG = "#dfe3ea"
-FG = "#111111"
-CARD = "#f7f8fb"
-ACCENT = "#0b6bcb"
-BTN = "#e6ebf2"
-MUTED = "#444444"
+# 强制浅色高对比（macOS 深色模式下 tk 常把字渲成白）
+BG = "#e8ecf1"
+FG = "#000000"
+CARD = "#ffffff"
+ACCENT = "#0a5fad"
+BTN = "#d9dee8"
+BTN_FG = "#000000"
+MUTED = "#333333"
 ENTRY_BG = "#ffffff"
-BORDER = "#8a94a6"
+BORDER = "#6b7280"
+BAR = "#1e3a5f"
+BAR_FG = "#ffffff"
 FONT = ("PingFang SC", 13)
 FONT_B = ("PingFang SC", 14, "bold")
 FONT_S = ("PingFang SC", 12)
@@ -49,20 +53,75 @@ FIXED_NAMES = {"2d": "2D", "vr": "VR"}
 
 
 def _btn(parent: Any, text: str, command: Any, accent: bool = False) -> Button:
+    if accent:
+        return Button(
+            parent,
+            text=text,
+            command=command,
+            bg=ACCENT,
+            fg="#ffffff",
+            activebackground="#084a8a",
+            activeforeground="#ffffff",
+            disabledforeground="#cccccc",
+            highlightbackground=ACCENT,
+            highlightthickness=1,
+            relief="raised",
+            bd=2,
+            padx=12,
+            pady=6,
+            font=FONT_B,
+        )
     return Button(
         parent,
         text=text,
         command=command,
-        bg=ACCENT if accent else BTN,
-        fg="#ffffff" if accent else FG,
-        activebackground="#09569f" if accent else "#c8d3e0",
-        activeforeground="#ffffff" if accent else FG,
+        bg=BTN,
+        fg=BTN_FG,
+        activebackground="#c5ccd8",
+        activeforeground=BTN_FG,
+        disabledforeground="#666666",
+        highlightbackground=BORDER,
+        highlightthickness=1,
         relief="raised",
         bd=2,
         padx=12,
-        pady=5,
+        pady=6,
         font=FONT,
-        highlightthickness=0,
+    )
+
+
+def _bar_btn(parent: Any, text: str, command: Any, accent: bool = False) -> Button:
+    """底部栏按钮：深底上始终清晰。"""
+    if accent:
+        return Button(
+            parent,
+            text=text,
+            command=command,
+            bg="#2f9e44",
+            fg="#ffffff",
+            activebackground="#278a3a",
+            activeforeground="#ffffff",
+            highlightbackground="#2f9e44",
+            relief="raised",
+            bd=2,
+            padx=14,
+            pady=8,
+            font=FONT_B,
+        )
+    return Button(
+        parent,
+        text=text,
+        command=command,
+        bg="#3d5a80",
+        fg="#ffffff",
+        activebackground="#2f4868",
+        activeforeground="#ffffff",
+        highlightbackground="#3d5a80",
+        relief="raised",
+        bd=2,
+        padx=12,
+        pady=8,
+        font=FONT,
     )
 
 
@@ -83,11 +142,41 @@ def _entry(parent: Any, textvariable: StringVar, width: int = 16) -> Entry:
     )
 
 
+def _label(parent: Any, text: str = "", **kw: Any) -> Label:
+    opts = {
+        "bg": kw.pop("bg", CARD),
+        "fg": kw.pop("fg", FG),
+        "font": kw.pop("font", FONT),
+        "anchor": kw.pop("anchor", "w"),
+    }
+    opts.update(kw)
+    return Label(parent, text=text, **opts)
+
+
+def _check(parent: Any, text: str, variable: BooleanVar) -> Checkbutton:
+    return Checkbutton(
+        parent,
+        text=text,
+        variable=variable,
+        bg=CARD,
+        fg=FG,
+        activebackground=CARD,
+        activeforeground=FG,
+        selectcolor=ENTRY_BG,
+        highlightbackground=CARD,
+        highlightthickness=0,
+        font=FONT,
+        anchor="w",
+        justify=LEFT,
+    )
+
+
 def _card(parent: Any, title: str) -> Frame:
     wrap = Frame(parent, bg=BG)
     wrap.pack(fill=X, pady=(0, 12))
     Label(wrap, text=title, bg=BG, fg=FG, font=FONT_B, anchor="w").pack(fill=X, pady=(0, 4))
-    body = Frame(wrap, bg=CARD, bd=2, relief="groove", padx=12, pady=10)
+    body = Frame(wrap, bg=CARD, bd=2, relief="groove", padx=12, pady=10,
+                 highlightbackground=BORDER, highlightthickness=1)
     body.pack(fill=X)
     return body
 
@@ -96,9 +185,23 @@ class LibraryGUI:
     def __init__(self) -> None:
         self.root = Tk()
         self.root.title("DeoVR Library 管理器")
-        self.root.geometry("980x900")
-        self.root.minsize(880, 760)
+        self.root.geometry("960x780")
+        self.root.minsize(820, 640)
         self.root.configure(bg=BG)
+        try:
+            # 尽量避免跟随系统深色模式导致白字
+            self.root.tk.call("tk", "scaling", 1.0)
+            self.root.option_add("*Foreground", FG)
+            self.root.option_add("*Background", CARD)
+            self.root.option_add("*Entry.Foreground", FG)
+            self.root.option_add("*Entry.Background", ENTRY_BG)
+            self.root.option_add("*Button.Foreground", BTN_FG)
+            self.root.option_add("*Label.Foreground", FG)
+            self.root.option_add("*Checkbutton.Foreground", FG)
+            self.root.option_add("*Listbox.Foreground", FG)
+            self.root.option_add("*Listbox.Background", ENTRY_BG)
+        except Exception:
+            pass
 
         self.cfg = load_config()
         self.db = Database(DEFAULT_DB)
@@ -153,8 +256,65 @@ class LibraryGUI:
             messagebox.showwarning("提示", "未能自动检测本机局域网 IP，请手动填写")
 
     def _build(self) -> None:
-        outer = Frame(self.root, bg=BG, padx=16, pady=14)
-        outer.pack(fill=BOTH, expand=True)
+        # ===== 底部固定：启停服务（始终可见）=====
+        bar = Frame(self.root, bg=BAR, padx=14, pady=12)
+        bar.pack(side="bottom", fill=X)
+        row1 = Frame(bar, bg=BAR)
+        row1.pack(fill=X)
+        Label(row1, text="HTTP 服务", bg=BAR, fg=BAR_FG, font=FONT_B).pack(side=LEFT, padx=(0, 12))
+        Label(row1, text="Host", bg=BAR, fg=BAR_FG, font=FONT).pack(side=LEFT)
+        _entry(row1, self.host_var, 12).pack(side=LEFT, padx=(4, 10))
+        Label(row1, text="Port", bg=BAR, fg=BAR_FG, font=FONT).pack(side=LEFT)
+        _entry(row1, self.port_var, 6).pack(side=LEFT, padx=(4, 14))
+        self.btn_start = _bar_btn(row1, "▶ 启动服务", self.start_server, accent=True)
+        self.btn_start.pack(side=LEFT, padx=(0, 8))
+        self.btn_stop = _bar_btn(row1, "■ 停止服务", self.stop_server)
+        self.btn_stop.pack(side=LEFT, padx=(0, 8))
+        _bar_btn(row1, "打开网页", self.open_web).pack(side=LEFT, padx=(0, 8))
+        _bar_btn(row1, "打开引导", self.open_guide).pack(side=LEFT, padx=(0, 8))
+        _bar_btn(row1, "复制 DeoVR", self.copy_deovr).pack(side=LEFT)
+
+        row2 = Frame(bar, bg=BAR)
+        row2.pack(fill=X, pady=(8, 0))
+        self.stats_lbl = Label(row2, text="", bg=BAR, fg="#d7e3f4", font=FONT_S, anchor="w")
+        self.stats_lbl.pack(side=LEFT, fill=X, expand=True)
+        Label(row2, textvariable=self.status_var, bg=BAR, fg="#ffffff", font=FONT_S, anchor="e").pack(
+            side=RIGHT
+        )
+
+        # ===== 可滚动主体 =====
+        shell = Frame(self.root, bg=BG)
+        shell.pack(fill=BOTH, expand=True)
+        canvas = Canvas(shell, bg=BG, highlightthickness=0)
+        vsb = Scrollbar(shell, orient=VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=RIGHT, fill=Y)
+        canvas.pack(side=LEFT, fill=BOTH, expand=True)
+
+        outer = Frame(canvas, bg=BG, padx=16, pady=14)
+        win_id = canvas.create_window((0, 0), window=outer, anchor="nw")
+
+        def _on_frame_configure(_event: object = None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(event: Any) -> None:
+            canvas.itemconfigure(win_id, width=event.width)
+
+        outer.bind("<Configure>", _on_frame_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event: Any) -> None:
+            delta = getattr(event, "delta", 0)
+            if delta:
+                canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+            elif getattr(event, "num", None) == 4:
+                canvas.yview_scroll(-1, "units")
+            elif getattr(event, "num", None) == 5:
+                canvas.yview_scroll(1, "units")
+
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind_all("<Button-4>", _on_mousewheel)
+        canvas.bind_all("<Button-5>", _on_mousewheel)
 
         Label(
             outer,
@@ -165,26 +325,25 @@ class LibraryGUI:
         ).pack(anchor="w")
         Label(
             outer,
-            text="把 Emby/Jellyfin 片库变成 DeoVR 可浏览的媒体库页",
+            text="把 Emby/Jellyfin 片库变成 DeoVR 可浏览的媒体库页 · 底部栏可启停服务",
             bg=BG,
             fg=MUTED,
             font=FONT_S,
             anchor="w",
         ).pack(fill=X, pady=(2, 12))
 
-        # ---- 固定 2D / VR ----
         fixed = _card(outer, "① 固定 2D / VR 目录（推荐）")
         row2d = Frame(fixed, bg=CARD)
         row2d.pack(fill=X, pady=(0, 6))
         Label(row2d, text="2D", bg=CARD, fg=FG, font=FONT_B, width=4).pack(side=LEFT)
-        _entry(row2d, self.path_2d_var, 52).pack(side=LEFT, padx=6, fill=X, expand=True)
+        _entry(row2d, self.path_2d_var, 48).pack(side=LEFT, padx=6, fill=X, expand=True)
         _btn(row2d, "选择…", lambda: self._pick_fixed("2d")).pack(side=LEFT, padx=(0, 6))
         _btn(row2d, "清除", lambda: self._clear_fixed("2d")).pack(side=LEFT)
 
         rowvr = Frame(fixed, bg=CARD)
         rowvr.pack(fill=X, pady=(0, 6))
         Label(rowvr, text="VR", bg=CARD, fg=FG, font=FONT_B, width=4).pack(side=LEFT)
-        _entry(rowvr, self.path_vr_var, 52).pack(side=LEFT, padx=6, fill=X, expand=True)
+        _entry(rowvr, self.path_vr_var, 48).pack(side=LEFT, padx=6, fill=X, expand=True)
         _btn(rowvr, "选择…", lambda: self._pick_fixed("vr")).pack(side=LEFT, padx=(0, 6))
         _btn(rowvr, "清除", lambda: self._clear_fixed("vr")).pack(side=LEFT)
 
@@ -197,7 +356,6 @@ class LibraryGUI:
             anchor="w",
         ).pack(fill=X)
 
-        # ---- 目录列表 ----
         lib = _card(outer, "② 全部媒体目录")
         list_frm = Frame(lib, bg=CARD)
         list_frm.pack(fill=X)
@@ -227,19 +385,8 @@ class LibraryGUI:
         _btn(row_lib, "保存配置", self.save, accent=True).pack(side=LEFT, padx=(0, 8))
         _btn(row_lib, "重置全部", self.reset_all).pack(side=LEFT)
 
-        # ---- 扫描 ----
         scan = _card(outer, "③ 扫描入库")
-        Checkbutton(
-            scan,
-            text="强制全量重扫（忽略增量）",
-            variable=self.force_var,
-            bg=CARD,
-            fg=FG,
-            activebackground=CARD,
-            selectcolor=ENTRY_BG,
-            font=FONT,
-            anchor="w",
-        ).pack(anchor="w")
+        _check(scan, "强制全量重扫（忽略增量）", self.force_var).pack(anchor="w")
         row_scan = Frame(scan, bg=CARD)
         row_scan.pack(fill=X, pady=8)
         _btn(row_scan, "扫描并生成数据库", self.start_scan, accent=True).pack(
@@ -256,23 +403,16 @@ class LibraryGUI:
             fg=MUTED,
             font=FONT_S,
             anchor="w",
-            wraplength=900,
+            wraplength=860,
             justify=LEFT,
         )
         self.scan_log.pack(fill=X, pady=(4, 0))
 
-        # ---- 改地址 ----
         rw = _card(outer, "④ 自定义改地址（STRM 本机/局域网 → 头显可访问 IP）")
-        Checkbutton(
+        _check(
             rw,
-            text="启用改写：播放时把 STRM 里的 127.0.0.1 / 私网 IP 换成下面地址",
-            variable=self.rewrite_enabled_var,
-            bg=CARD,
-            fg=FG,
-            activebackground=CARD,
-            selectcolor=ENTRY_BG,
-            font=FONT,
-            anchor="w",
+            "启用改写：播放时把 STRM 里的 127.0.0.1 / 私网 IP 换成下面地址",
+            self.rewrite_enabled_var,
         ).pack(anchor="w")
 
         row_rw = Frame(rw, bg="#e8f1ff", bd=1, relief="solid", padx=10, pady=10)
@@ -290,28 +430,14 @@ class LibraryGUI:
         )
         self.detect_lbl.pack(side=LEFT)
 
-        Checkbutton(
+        _check(
             rw,
-            text="本机/私网 STRM 自动解析到 CDN 直链（推荐，默认开）",
-            variable=self.auto_resolve_var,
-            bg=CARD,
-            fg=FG,
-            activebackground=CARD,
-            selectcolor=ENTRY_BG,
-            font=FONT,
-            anchor="w",
+            "本机/私网 STRM 自动解析到 CDN 直链（推荐，默认开）",
+            self.auto_resolve_var,
         ).pack(anchor="w")
-        Checkbutton(
-            rw,
-            text="始终解析跳转（resolve_strm_redirects）",
-            variable=self.resolve_cdn_var,
-            bg=CARD,
-            fg=FG,
-            activebackground=CARD,
-            selectcolor=ENTRY_BG,
-            font=FONT,
-            anchor="w",
-        ).pack(anchor="w")
+        _check(rw, "始终解析跳转（resolve_strm_redirects）", self.resolve_cdn_var).pack(
+            anchor="w"
+        )
         Label(
             rw,
             text="磁盘 .strm 不会改；详情页 /api/resolve 可看 raw → final。改完请点「保存配置」。",
@@ -321,25 +447,14 @@ class LibraryGUI:
             anchor="w",
         ).pack(fill=X, pady=(6, 0))
 
-        # ---- 服务 ----
-        srv = _card(outer, "⑤ HTTP 服务")
-        row_srv = Frame(srv, bg=CARD)
-        row_srv.pack(fill=X)
-        Label(row_srv, text="Host", bg=CARD, fg=FG, font=FONT).pack(side=LEFT)
-        _entry(row_srv, self.host_var, 14).pack(side=LEFT, padx=(6, 14))
-        Label(row_srv, text="Port", bg=CARD, fg=FG, font=FONT).pack(side=LEFT)
-        _entry(row_srv, self.port_var, 8).pack(side=LEFT, padx=(6, 14))
-        _btn(row_srv, "启动服务", self.start_server, accent=True).pack(side=LEFT, padx=(0, 8))
-        _btn(row_srv, "停止服务", self.stop_server).pack(side=LEFT, padx=(0, 8))
-        _btn(row_srv, "打开网页", self.open_web).pack(side=LEFT, padx=(0, 8))
-        _btn(row_srv, "打开引导", self.open_guide).pack(side=LEFT, padx=(0, 8))
-        _btn(row_srv, "复制 DeoVR", self.copy_deovr).pack(side=LEFT)
-
-        self.stats_lbl = Label(outer, text="", bg=BG, fg=MUTED, font=FONT_S, anchor="w")
-        self.stats_lbl.pack(fill=X, pady=(6, 0))
-        Label(outer, textvariable=self.status_var, bg=BG, fg=MUTED, font=FONT_S, anchor="w").pack(
-            fill=X
-        )
+        Label(
+            outer,
+            text="服务启停请用窗口最底部深色栏的「启动服务 / 停止服务」。",
+            bg=BG,
+            fg=MUTED,
+            font=FONT_S,
+            anchor="w",
+        ).pack(fill=X, pady=(4, 8))
 
     def _libs_from_list(self) -> list[dict[str, Any]]:
         return [{"name": r["name"], "kind": r["kind"], "path": r["path"]} for r in self._lib_rows]
@@ -674,6 +789,11 @@ class LibraryGUI:
         ip = self._lan_ip()
         rw = self.rewrite_to_var.get().strip()
         self.status_var.set(f"已启动 http://{ip}:{port}/browse · 改写→{rw or '关'}")
+        try:
+            self.btn_start.config(state="disabled")
+            self.btn_stop.config(state="normal")
+        except Exception:
+            pass
         messagebox.showinfo(
             "已启动",
             f"网页: http://127.0.0.1:{port}/browse\n"
