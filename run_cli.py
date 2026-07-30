@@ -194,19 +194,79 @@ def cmd_config(args: argparse.Namespace) -> int:
     return 0
 
 
+FIXED_LIB_NAMES = {"2d": "2D", "vr": "VR"}
+
+
+def _libs_without_kind(libs: list, kind: str) -> list:
+    return [x for x in libs if (x.get("kind") or "").lower() != kind]
+
+
+def _set_fixed_library(cfg: dict, kind: str, path: Path) -> dict:
+    """每个 kind 只保留一个固定槽位（名称 2D / VR）。"""
+    kind = kind.lower()
+    name = FIXED_LIB_NAMES[kind]
+    libs = _libs_without_kind(list(cfg.get("libraries") or []), kind)
+    # 同时去掉同名旧项
+    libs = [x for x in libs if x.get("name") != name]
+    libs.append({"name": name, "path": str(path), "kind": kind})
+    # 稳定顺序：2D 在前，VR 在后，其它在后
+    order = {"2d": 0, "vr": 1}
+    libs.sort(key=lambda x: order.get((x.get("kind") or "").lower(), 9))
+    cfg["libraries"] = libs
+    return cfg
+
+
 def cmd_library(args: argparse.Namespace) -> int:
     cfg = load_config()
     libs: list = list(cfg.get("libraries") or [])
+    action = args.action
 
-    if args.action == "list":
+    if action == "list":
         if not libs:
-            print("(空)")
+            print("(空) 可用: library set-2d / set-vr")
             return 0
         for i, lib in enumerate(libs, 1):
             print(f"{i}. {lib.get('name')} [{lib.get('kind')}] {lib.get('path')}")
+        # 固定槽位摘要
+        by_kind = {(x.get("kind") or "").lower(): x for x in libs}
+        print("--- 固定槽位 ---")
+        for k, label in (("2d", "2D"), ("vr", "VR")):
+            cur = by_kind.get(k)
+            if cur:
+                print(f"  {label}: {cur.get('path')}")
+            else:
+                print(f"  {label}: (未设置)")
         return 0
 
-    if args.action == "add":
+    if action in ("set-2d", "set-vr"):
+        kind = "2d" if action == "set-2d" else "vr"
+        path = Path(args.path).expanduser().resolve()
+        if not path.is_dir():
+            print(f"目录不存在: {path}")
+            return 1
+        cfg = _set_fixed_library(cfg, kind, path)
+        save_config(cfg)
+        print(f"已设置固定{FIXED_LIB_NAMES[kind]}目录: {path}")
+        return 0
+
+    if action in ("clear-2d", "clear-vr"):
+        kind = "2d" if action == "clear-2d" else "vr"
+        name = FIXED_LIB_NAMES[kind]
+        before = len(libs)
+        libs = [
+            x
+            for x in libs
+            if (x.get("kind") or "").lower() != kind and x.get("name") != name
+        ]
+        if len(libs) == before:
+            print(f"固定{name}目录未设置")
+            return 1
+        cfg["libraries"] = libs
+        save_config(cfg)
+        print(f"已清除固定{name}目录")
+        return 0
+
+    if action == "add":
         path = Path(args.path).expanduser().resolve()
         if not path.is_dir():
             print(f"目录不存在: {path}")
@@ -221,7 +281,7 @@ def cmd_library(args: argparse.Namespace) -> int:
         print(f"已添加: {name} [{kind}] {path}")
         return 0
 
-    if args.action == "remove":
+    if action == "remove":
         before = len(libs)
         libs = [x for x in libs if x.get("name") != args.name and x.get("path") != args.name]
         if len(libs) == before:
@@ -393,17 +453,34 @@ def main(argv: list[str] | None = None) -> int:
     _add_rewrite_args(c)
     c.set_defaults(func=cmd_config)
 
-    lib = sub.add_parser("library", help="媒体目录管理")
+    lib = sub.add_parser("library", help="媒体目录管理（含固定 2D/VR 槽位）")
     lib_sub = lib.add_subparsers(dest="action", required=True)
     lib_sub.add_parser("list", help="列出目录").set_defaults(func=cmd_library, action="list")
-    la = lib_sub.add_parser("add", help="添加目录")
+
+    la = lib_sub.add_parser("add", help="添加目录（可多个）")
     la.add_argument("--path", required=True)
     la.add_argument("--name", default="")
     la.add_argument("--kind", choices=["2d", "vr"], default="2d")
     la.set_defaults(func=cmd_library, action="add")
+
     lr = lib_sub.add_parser("remove", help="按名称或路径移除")
     lr.add_argument("name", help="目录 name 或 path")
     lr.set_defaults(func=cmd_library, action="remove")
+
+    s2 = lib_sub.add_parser("set-2d", help="设置/覆盖固定 2D 目录")
+    s2.add_argument("--path", required=True)
+    s2.set_defaults(func=cmd_library, action="set-2d")
+
+    sv = lib_sub.add_parser("set-vr", help="设置/覆盖固定 VR 目录")
+    sv.add_argument("--path", required=True)
+    sv.set_defaults(func=cmd_library, action="set-vr")
+
+    lib_sub.add_parser("clear-2d", help="清除固定 2D 目录").set_defaults(
+        func=cmd_library, action="clear-2d"
+    )
+    lib_sub.add_parser("clear-vr", help="清除固定 VR 目录").set_defaults(
+        func=cmd_library, action="clear-vr"
+    )
 
     i = sub.add_parser("init", help="写入默认配置；--reset 清空全部本地数据后重建")
     i.add_argument(

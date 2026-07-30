@@ -11,11 +11,17 @@
 
 ```bash
 cd deovr-library
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+chmod +x install.sh
+./install.sh --demo --serve
+```
 
-python run_cli.py demo             # 重置配置 → 扫 testdata → 打印访问地址
+或手动：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python run_cli.py demo
 python run_cli.py serve --port 8765
 ```
 
@@ -37,10 +43,31 @@ python run_cli.py init --reset
 
 ## 接入自己的片库
 
+**macOS 一键安装（推荐）：**
+
+```bash
+chmod +x install.sh
+./install.sh --2d ~/Movies/2D --vr ~/Movies/VR --rewrite-to 192.168.0.34 --serve
+```
+
+固定 2D / VR 目录可随时改：
+
+```bash
+source .venv/bin/activate
+python run_cli.py library set-2d --path "/新的/2D目录"   # 增/改
+python run_cli.py library set-vr --path "/新的/VR目录"
+python run_cli.py library clear-2d                       # 删
+python run_cli.py library clear-vr
+python run_cli.py library list
+python run_cli.py scan --force
+```
+
+或逐步命令：
+
 ```bash
 python run_cli.py init --reset
-python run_cli.py library add --path "/本机真实目录" --name Movies --kind 2d
-python run_cli.py library add --path "/本机真实VR目录" --name Movies-VR --kind vr
+python run_cli.py library set-2d --path "/本机真实目录"
+python run_cli.py library set-vr --path "/本机真实VR目录"
 python run_cli.py config --rewrite --rewrite-to 192.168.0.18
 python run_cli.py scan --force
 python run_cli.py serve --port 8765
