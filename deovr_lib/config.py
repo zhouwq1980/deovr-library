@@ -24,11 +24,11 @@ DEFAULTS: dict[str, Any] = {
     "deovr_genre_tabs": 8,
     "deovr_actor_tabs": 0,
     "thumb_max_width": 480,
-    # 自定义改地址：把 STRM 里的源主机改写成局域网 IP
+    # 自定义改地址：STRM 里的本机/局域网主机 → rewrite_to（公网不改）
     "rewrite_localhost_enabled": True,
     "rewrite_to": "192.168.0.18",
-    # 要替换的源主机（可含旧局域网 IP，如 192.168.0.16）；回环地址会自动并入
-    "rewrite_from": ["127.0.0.1", "localhost", "::1", "192.168.0.16"],
+    # 可选：额外要改写的主机名；一般不用填，私网 IP / 127.0.0.1 会自动改
+    "rewrite_from": [],
     # 可选：服务端跟随跳转到最终直链/CDN（与改地址可同时开；改地址作用于仍为本机的链接）
     "resolve_strm_redirects": False,
     "media_url_cache_ttl": 300,

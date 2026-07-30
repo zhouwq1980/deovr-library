@@ -53,14 +53,14 @@ def _apply_rewrite_args(cfg: dict, args: argparse.Namespace) -> dict:
 
 
 def _add_rewrite_args(p: argparse.ArgumentParser) -> None:
-    g = p.add_argument_group("自定义改地址（STRM 源主机 → 局域网 IP）")
+    g = p.add_argument_group("自定义改地址（STRM 本机/局域网主机 → rewrite_to）")
     g.add_argument("--rewrite", action="store_true", help="启用改写")
     g.add_argument("--no-rewrite", action="store_true", help="关闭改写")
-    g.add_argument("--rewrite-to", metavar="IP", help="目标 IP，如 192.168.0.18")
+    g.add_argument("--rewrite-to", metavar="IP", help="目标 IP，如 192.168.0.18（一般只配这个）")
     g.add_argument(
         "--rewrite-from",
         metavar="HOSTS",
-        help="要替换的源主机，逗号分隔，如 127.0.0.1,192.168.0.16",
+        help="可选：额外主机名，逗号分隔；127.0.0.1/192.168.x.x 等会自动改，通常不必填",
     )
     g.add_argument("--resolve-cdn", action="store_true", help="同时解析到 CDN/直链")
     g.add_argument("--no-resolve-cdn", action="store_true", help="关闭 CDN 解析")

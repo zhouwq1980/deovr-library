@@ -601,6 +601,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             "rewrite_enabled": bool(app.state.cfg.get("rewrite_localhost_enabled", True)),
             "rewrite_to": rewrite_target(request),
             "rewrite_from": normalize_rewrite_from(app.state.cfg.get("rewrite_from")),
+            "rewrite_mode": "auto-private+loopback",
             "resolve_strm_redirects": bool(app.state.cfg.get("resolve_strm_redirects", False)),
         }
 

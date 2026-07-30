@@ -10,28 +10,72 @@ _cache: dict[str, tuple[str, float]] = {}
 _lock = Lock()
 DEFAULT_TTL = 300  # CDN 链接缓存 5 分钟
 
-# 默认只改本机回环；STRM 里若写了旧局域网 IP，请在 config.rewrite_from 里追加
+# 回环地址；局域网私网段会自动识别，无需再配 rewrite_from
 DEFAULT_REWRITE_FROM = ("127.0.0.1", "localhost", "::1", "0.0.0.0")
 
 
 def normalize_rewrite_from(value: object | None) -> list[str]:
-    """支持 list / 逗号分隔字符串。"""
+    """可选的额外源主机；None/空表示不额外指定（仍会自动改写回环+私网）。"""
     if value is None:
-        return list(DEFAULT_REWRITE_FROM)
+        return []
     items: list[str] = []
     if isinstance(value, (list, tuple, set)):
         raw = list(value)
     else:
-        raw = str(value).replace(";", ",").split(",")
+        s = str(value).strip()
+        if not s:
+            return []
+        raw = s.replace(";", ",").split(",")
     for x in raw:
         h = str(x).strip().lower()
         if h:
             items.append(h)
-    # 始终保留回环，避免只配了旧 IP 却漏掉 127.0.0.1
-    for h in DEFAULT_REWRITE_FROM:
-        if h not in items:
-            items.append(h)
     return items
+
+
+def _is_loopback_host(host: str) -> bool:
+    h = (host or "").lower()
+    return h in DEFAULT_REWRITE_FROM or h.endswith(".localhost")
+
+
+def _is_private_ip(host: str) -> bool:
+    """RFC1918 / link-local：STRM 里常见的本机播放网关地址。"""
+    h = (host or "").lower().strip("[]")
+    parts = h.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        nums = [int(x) for x in parts]
+    except ValueError:
+        return False
+    if any(n < 0 or n > 255 for n in nums):
+        return False
+    a, b = nums[0], nums[1]
+    if a == 10:
+        return True
+    if a == 172 and 16 <= b <= 31:
+        return True
+    if a == 192 and b == 168:
+        return True
+    if a == 169 and b == 254:
+        return True
+    return False
+
+
+def should_rewrite_host(
+    host: str,
+    lan_host: str,
+    rewrite_from: object | None = None,
+) -> bool:
+    """默认：回环 + 私网 IP 都改写到 rewrite_to；公网 CDN 不改。"""
+    h = (host or "").lower()
+    target = (lan_host or "").strip().lower()
+    if not h or not target or h == target:
+        return False
+    if _is_loopback_host(h) or _is_private_ip(h):
+        return True
+    extra = set(normalize_rewrite_from(rewrite_from))
+    return h in extra
 
 
 def rewrite_loopback(
@@ -39,18 +83,12 @@ def rewrite_loopback(
     lan_host: str,
     rewrite_from: object | None = None,
 ) -> str:
-    """把 STRM 里的源主机（默认 127.0.0.1/localhost，可含旧局域网 IP）改成 rewrite_to。"""
+    """把 STRM 里的本机/局域网主机改成 rewrite_to（公网地址不改）。"""
     if not url or not lan_host:
         return url
     p = urlparse(url)
     host = (p.hostname or "").lower()
-    if not host:
-        return url
-    sources = set(normalize_rewrite_from(rewrite_from))
-    target = lan_host.strip().lower()
-    if host == target:
-        return url
-    if host not in sources:
+    if not should_rewrite_host(host, lan_host, rewrite_from=rewrite_from):
         return url
     netloc = lan_host.strip()
     if p.port:
@@ -90,7 +128,8 @@ def resolve_media_url(
         return url
 
     # 缓存键含改写目标，避免换 IP 后仍命中旧结果
-    cache_key = f"{url}|{lan_host}|{','.join(normalize_rewrite_from(rewrite_from))}"
+    from_key = ",".join(normalize_rewrite_from(rewrite_from)) if rewrite_from else "auto"
+    cache_key = f"{url}|{lan_host}|{from_key}"
     now = time.time()
     if use_cache:
         with _lock:
