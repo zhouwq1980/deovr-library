@@ -12,7 +12,6 @@ from tkinter import (
     RIGHT,
     VERTICAL,
     BooleanVar,
-    Button,
     Canvas,
     Checkbutton,
     Entry,
@@ -27,6 +26,7 @@ from tkinter import (
     Y,
     filedialog,
     messagebox,
+    ttk,
 )
 from typing import Any
 
@@ -34,95 +34,144 @@ from .config import DEFAULT_CONFIG, DEFAULT_DB, DEFAULTS, THUMB_CACHE, load_conf
 from .db import Database
 from .scanner import scan_all
 
-# 强制浅色高对比（macOS 深色模式下 tk 常把字渲成白）
+# 强制浅色高对比。按钮必须用 ttk+clam：macOS Aqua 会忽略 Button 的 bg，却保留白字 → 看不见
 BG = "#e8ecf1"
 FG = "#000000"
 CARD = "#ffffff"
 ACCENT = "#0a5fad"
-BTN = "#d9dee8"
-BTN_FG = "#000000"
-MUTED = "#333333"
+BTN = "#d0d7e2"
+MUTED = "#222222"
 ENTRY_BG = "#ffffff"
-BORDER = "#6b7280"
-BAR = "#1e3a5f"
+BORDER = "#4b5563"
+BAR = "#12304f"
 BAR_FG = "#ffffff"
 FONT = ("PingFang SC", 13)
 FONT_B = ("PingFang SC", 14, "bold")
 FONT_S = ("PingFang SC", 12)
 FIXED_NAMES = {"2d": "2D", "vr": "VR"}
 
+_STYLE_READY = False
 
-def _btn(parent: Any, text: str, command: Any, accent: bool = False) -> Button:
-    if accent:
-        return Button(
-            parent,
-            text=text,
-            command=command,
-            bg=ACCENT,
-            fg="#ffffff",
-            activebackground="#084a8a",
-            activeforeground="#ffffff",
-            disabledforeground="#cccccc",
-            highlightbackground=ACCENT,
-            highlightthickness=1,
-            relief="raised",
-            bd=2,
-            padx=12,
-            pady=6,
-            font=FONT_B,
-        )
-    return Button(
-        parent,
-        text=text,
-        command=command,
-        bg=BTN,
-        fg=BTN_FG,
-        activebackground="#c5ccd8",
-        activeforeground=BTN_FG,
-        disabledforeground="#666666",
-        highlightbackground=BORDER,
-        highlightthickness=1,
-        relief="raised",
-        bd=2,
-        padx=12,
-        pady=6,
+
+def _ensure_styles(root: Tk) -> None:
+    """macOS 上唯有 clam 主题能稳定画出有底色的按钮。"""
+    global _STYLE_READY
+    if _STYLE_READY:
+        return
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+
+    def cfg(name: str, **kw: Any) -> None:
+        style.configure(name, **kw)
+
+    def mp(name: str, **kw: Any) -> None:
+        style.map(name, **kw)
+
+    cfg(
+        "App.TButton",
         font=FONT,
+        foreground="#000000",
+        background=BTN,
+        bordercolor=BORDER,
+        lightcolor=BTN,
+        darkcolor=BORDER,
+        focuscolor=ACCENT,
+        padding=(12, 8),
+        relief="raised",
+    )
+    mp(
+        "App.TButton",
+        foreground=[("disabled", "#666666"), ("!disabled", "#000000")],
+        background=[("active", "#b8c2d1"), ("pressed", "#a8b4c6"), ("disabled", "#e5e7eb")],
     )
 
-
-def _bar_btn(parent: Any, text: str, command: Any, accent: bool = False) -> Button:
-    """底部栏按钮：深底上始终清晰。"""
-    if accent:
-        return Button(
-            parent,
-            text=text,
-            command=command,
-            bg="#2f9e44",
-            fg="#ffffff",
-            activebackground="#278a3a",
-            activeforeground="#ffffff",
-            highlightbackground="#2f9e44",
-            relief="raised",
-            bd=2,
-            padx=14,
-            pady=8,
-            font=FONT_B,
-        )
-    return Button(
-        parent,
-        text=text,
-        command=command,
-        bg="#3d5a80",
-        fg="#ffffff",
-        activebackground="#2f4868",
-        activeforeground="#ffffff",
-        highlightbackground="#3d5a80",
+    cfg(
+        "Accent.TButton",
+        font=FONT_B,
+        foreground="#ffffff",
+        background=ACCENT,
+        bordercolor="#063a6b",
+        lightcolor=ACCENT,
+        darkcolor="#063a6b",
+        focuscolor="#ffffff",
+        padding=(12, 8),
         relief="raised",
-        bd=2,
-        padx=12,
-        pady=8,
-        font=FONT,
     )
+    mp(
+        "Accent.TButton",
+        foreground=[("disabled", "#dddddd"), ("!disabled", "#ffffff")],
+        background=[("active", "#084a8a"), ("pressed", "#063a6b"), ("disabled", "#7aa3c9")],
+    )
+
+    cfg(
+        "Bar.TButton",
+        font=FONT,
+        foreground="#ffffff",
+        background="#2c4a6e",
+        bordercolor="#0b1c2e",
+        lightcolor="#2c4a6e",
+        darkcolor="#0b1c2e",
+        focuscolor="#ffffff",
+        padding=(12, 9),
+        relief="raised",
+    )
+    mp(
+        "Bar.TButton",
+        foreground=[("disabled", "#aab"), ("!disabled", "#ffffff")],
+        background=[("active", "#3a5f8a"), ("pressed", "#1f3550"), ("disabled", "#5a6f86")],
+    )
+
+    cfg(
+        "Go.TButton",
+        font=FONT_B,
+        foreground="#ffffff",
+        background="#1f8a3a",
+        bordercolor="#0f5a22",
+        lightcolor="#1f8a3a",
+        darkcolor="#0f5a22",
+        focuscolor="#ffffff",
+        padding=(14, 9),
+        relief="raised",
+    )
+    mp(
+        "Go.TButton",
+        foreground=[("disabled", "#dfe"), ("!disabled", "#ffffff")],
+        background=[("active", "#27a046"), ("pressed", "#176b2c"), ("disabled", "#7cbc8d")],
+    )
+
+    cfg(
+        "Stop.TButton",
+        font=FONT_B,
+        foreground="#ffffff",
+        background="#b42318",
+        bordercolor="#7a160f",
+        lightcolor="#b42318",
+        darkcolor="#7a160f",
+        focuscolor="#ffffff",
+        padding=(12, 9),
+        relief="raised",
+    )
+    mp(
+        "Stop.TButton",
+        foreground=[("disabled", "#ecc"), ("!disabled", "#ffffff")],
+        background=[("active", "#d92d20"), ("pressed", "#912018"), ("disabled", "#d4a19c")],
+    )
+    _STYLE_READY = True
+
+
+def _btn(parent: Any, text: str, command: Any, accent: bool = False) -> ttk.Button:
+    style = "Accent.TButton" if accent else "App.TButton"
+    return ttk.Button(parent, text=text, command=command, style=style)
+
+
+def _bar_btn(parent: Any, text: str, command: Any, accent: bool = False) -> ttk.Button:
+    style = "Go.TButton" if accent else "Bar.TButton"
+    if "停止" in text:
+        style = "Stop.TButton"
+    return ttk.Button(parent, text=text, command=command, style=style)
 
 
 def _entry(parent: Any, textvariable: StringVar, width: int = 16) -> Entry:
@@ -142,17 +191,6 @@ def _entry(parent: Any, textvariable: StringVar, width: int = 16) -> Entry:
     )
 
 
-def _label(parent: Any, text: str = "", **kw: Any) -> Label:
-    opts = {
-        "bg": kw.pop("bg", CARD),
-        "fg": kw.pop("fg", FG),
-        "font": kw.pop("font", FONT),
-        "anchor": kw.pop("anchor", "w"),
-    }
-    opts.update(kw)
-    return Label(parent, text=text, **opts)
-
-
 def _check(parent: Any, text: str, variable: BooleanVar) -> Checkbutton:
     return Checkbutton(
         parent,
@@ -162,7 +200,7 @@ def _check(parent: Any, text: str, variable: BooleanVar) -> Checkbutton:
         fg=FG,
         activebackground=CARD,
         activeforeground=FG,
-        selectcolor=ENTRY_BG,
+        selectcolor="#e5e7eb",
         highlightbackground=CARD,
         highlightthickness=0,
         font=FONT,
@@ -175,8 +213,16 @@ def _card(parent: Any, title: str) -> Frame:
     wrap = Frame(parent, bg=BG)
     wrap.pack(fill=X, pady=(0, 12))
     Label(wrap, text=title, bg=BG, fg=FG, font=FONT_B, anchor="w").pack(fill=X, pady=(0, 4))
-    body = Frame(wrap, bg=CARD, bd=2, relief="groove", padx=12, pady=10,
-                 highlightbackground=BORDER, highlightthickness=1)
+    body = Frame(
+        wrap,
+        bg=CARD,
+        bd=2,
+        relief="groove",
+        padx=12,
+        pady=10,
+        highlightbackground=BORDER,
+        highlightthickness=1,
+    )
     body.pack(fill=X)
     return body
 
@@ -188,14 +234,12 @@ class LibraryGUI:
         self.root.geometry("960x780")
         self.root.minsize(820, 640)
         self.root.configure(bg=BG)
+        _ensure_styles(self.root)
         try:
-            # 尽量避免跟随系统深色模式导致白字
-            self.root.tk.call("tk", "scaling", 1.0)
             self.root.option_add("*Foreground", FG)
             self.root.option_add("*Background", CARD)
             self.root.option_add("*Entry.Foreground", FG)
             self.root.option_add("*Entry.Background", ENTRY_BG)
-            self.root.option_add("*Button.Foreground", BTN_FG)
             self.root.option_add("*Label.Foreground", FG)
             self.root.option_add("*Checkbutton.Foreground", FG)
             self.root.option_add("*Listbox.Foreground", FG)
