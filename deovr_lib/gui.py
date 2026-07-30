@@ -809,6 +809,11 @@ class LibraryGUI:
             return
         self.server.should_exit = True
         self.status_var.set("正在停止服务…")
+        try:
+            self.btn_start.config(state="normal")
+            self.btn_stop.config(state="disabled")
+        except Exception:
+            pass
 
     def open_web(self) -> None:
         webbrowser.open(f"http://127.0.0.1:{self.port_var.get()}/browse")
