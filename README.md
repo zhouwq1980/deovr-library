@@ -5,29 +5,30 @@
 
 完整说明见 **[使用手册.md](./使用手册.md)**。
 
-## 空白 Demo（推荐先测这个）
+## macOS 一键安装（推荐）
 
-仓库自带 `testdata/` 示例片（假 STRM + NFO + 封面，无真实影片）：
+无需先 clone，默认装到 `~/deovr-library`：
 
 ```bash
-cd deovr-library
-chmod +x install.sh
-./install.sh --demo --serve
+# 空白 Demo 并启动
+curl -fsSL https://raw.githubusercontent.com/zhouwq1980/deovr-library/main/install.sh | bash -s -- --demo --serve
+
+# 接入自己的 2D / VR 目录
+curl -fsSL https://raw.githubusercontent.com/zhouwq1980/deovr-library/main/install.sh | bash -s -- \
+  --2d ~/Movies/2D --vr ~/Movies/VR --rewrite-to 192.168.0.34 --serve
 ```
 
-或手动：
+已 clone 本地时也可：`./install.sh --demo --serve`
+
+## 空白 Demo
+
+仓库自带 `testdata/` 示例片（假 STRM + NFO + 封面，无真实影片）。
+
+手动：
 
 ```bash
-python3 -m venv .venv
+cd ~/deovr-library   # 或你的 clone 目录
 source .venv/bin/activate
-pip install -r requirements.txt
-python run_cli.py demo
-python run_cli.py serve --port 8765
-```
-
-或一步启动：
-
-```bash
 python run_cli.py demo --serve --port 8765
 ```
 
@@ -42,13 +43,6 @@ python run_cli.py init --reset
 ```
 
 ## 接入自己的片库
-
-**macOS 一键安装（推荐）：**
-
-```bash
-chmod +x install.sh
-./install.sh --2d ~/Movies/2D --vr ~/Movies/VR --rewrite-to 192.168.0.34 --serve
-```
 
 固定 2D / VR 目录可随时改：
 
