@@ -14,7 +14,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import load_config
 from .db import Database
-from .media import normalize_rewrite_from, resolve_media_url, rewrite_loopback
+from .media import (
+    is_private_or_loopback_host,
+    normalize_rewrite_from,
+    resolve_media_url,
+    rewrite_loopback,
+)
 from .nfo import is_http_url, media_content_type, read_strm
 from .thumbs import ensure_thumb
 
@@ -160,7 +165,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         )
 
     def media_url_for_client(request: Request, movie: dict[str, Any]) -> str:
-        """头显可访问的播放地址：本地文件走本服务 /play；STRM 改写 127.0.0.1 后直链。"""
+        """头显可访问的播放地址：本地文件走本服务 /play；STRM 改写后直链（可再解析 CDN）。"""
         bu = base_url(request)
         if is_local_media(movie):
             return f"{bu}/play/{movie['id']}"
@@ -176,7 +181,18 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         target = rewrite_target(request)
         from_hosts = cfg_l.get("rewrite_from")
         url = raw
-        if cfg_l.get("resolve_strm_redirects", False):
+
+        # 跟随跳转到最终直链/CDN：
+        # - 配置显式开启；或
+        # - STRM 仍是回环/私网网关时自动解析（否则只改 IP 头显仍可能打不开仅监听 127.0.0.1 的网关）
+        do_resolve = bool(cfg_l.get("resolve_strm_redirects", False))
+        if not do_resolve and bool(cfg_l.get("auto_resolve_private_strm", True)):
+            host = (urlparse(raw).hostname or "").lower()
+            # 本机/局域网播放网关：服务端跟随到 CDN 直链（仅改 IP 往往不够）
+            if is_private_or_loopback_host(host):
+                do_resolve = True
+        if do_resolve:
+            # 服务端用原始地址跟随（本机可访问 127.0.0.1）；终态若仍是私网再改写
             url = resolve_media_url(
                 raw,
                 lan_host=target,
@@ -463,7 +479,16 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         movie = database.get_movie(movie_id)
         if not movie:
             raise HTTPException(404, "未找到影片")
-        return _render("detail.html", movie=movie, base=base_url(request))
+        raw = strm_raw_url(movie)
+        play = media_url_for_client(request, movie) or f"{base_url(request)}/play/{movie_id}"
+        return _render(
+            "detail.html",
+            movie=movie,
+            base=base_url(request),
+            play_url=play,
+            raw_url=raw,
+            play_changed=bool(raw and play and raw != play),
+        )
 
     @app.get("/api/movies")
     async def api_movies(
@@ -574,18 +599,10 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             app.state.cfg = cfg_l
         except Exception:
             cfg_l = app.state.cfg
-        target = rewrite_target(request)
-        from_hosts = cfg_l.get("rewrite_from")
-        url = raw
-        if cfg_l.get("resolve_strm_redirects", False):
-            url = resolve_media_url(
-                url,
-                lan_host=target,
-                rewrite_from=from_hosts,
-                ttl=int(cfg_l.get("media_url_cache_ttl") or 300),
-            )
-        if cfg_l.get("rewrite_localhost_enabled", True) and target:
-            url = rewrite_loopback(url, target, rewrite_from=from_hosts)
+        # 与 DeoVR JSON 同一套改写/解析逻辑
+        url = media_url_for_client(request, movie)
+        if not url or not is_http_url(url):
+            raise HTTPException(404, "无有效播放地址（STRM 为空或本地文件缺失）")
         return RedirectResponse(url=url, status_code=302)
 
     @app.get("/api/resolve/{movie_id}")
@@ -594,12 +611,21 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         if not movie:
             raise HTTPException(404)
         raw = strm_raw_url(movie)
+        target = rewrite_target(request)
+        from_hosts = app.state.cfg.get("rewrite_from")
+        rewritten = (
+            rewrite_loopback(raw, target, rewrite_from=from_hosts)
+            if raw and target
+            else raw
+        )
         final = media_url_for_client(request, movie)
         return {
             "raw": raw,
+            "rewritten": rewritten,
             "final": final,
+            "changed": bool(raw and final and raw != final),
             "rewrite_enabled": bool(app.state.cfg.get("rewrite_localhost_enabled", True)),
-            "rewrite_to": rewrite_target(request),
+            "rewrite_to": target,
             "rewrite_from": normalize_rewrite_from(app.state.cfg.get("rewrite_from")),
             "rewrite_mode": "auto-private+loopback",
             "resolve_strm_redirects": bool(app.state.cfg.get("resolve_strm_redirects", False)),

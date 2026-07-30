@@ -14,6 +14,7 @@
   "rewrite_to": "192.168.0.18",
   "rewrite_from": [],
   "resolve_strm_redirects": false,
+  "auto_resolve_private_strm": true,
   "media_url_cache_ttl": 300,
   "video_extensions": [
     ".mp4", ".mkv", ".avi", ".m4v", ".mov", ".wmv",

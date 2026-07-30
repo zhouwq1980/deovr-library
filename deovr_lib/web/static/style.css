@@ -187,7 +187,22 @@ html, body {
 }
 .info dt { color: var(--muted); }
 .info dd { margin: 0; }
-.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.url-box {
+  margin: 6px 0 14px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  word-break: break-all;
+}
+.url-box code {
+  font-size: 0.78rem;
+  color: #c7d6ef;
+}
+.play-urls h3 {
+  margin: 20px 0 8px;
+  font-size: 1rem;
+}
 .tags a {
   background: #243044;
   color: var(--text);

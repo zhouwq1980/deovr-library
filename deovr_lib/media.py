@@ -62,6 +62,11 @@ def _is_private_ip(host: str) -> bool:
     return False
 
 
+def is_private_or_loopback_host(host: str) -> bool:
+    h = (host or "").lower()
+    return _is_loopback_host(h) or _is_private_ip(h)
+
+
 def should_rewrite_host(
     host: str,
     lan_host: str,

@@ -29,8 +29,10 @@ DEFAULTS: dict[str, Any] = {
     "rewrite_to": "192.168.0.18",
     # 可选：额外要改写的主机名；一般不用填，私网 IP / 127.0.0.1 会自动改
     "rewrite_from": [],
-    # 可选：服务端跟随跳转到最终直链/CDN（与改地址可同时开；改地址作用于仍为本机的链接）
+    # 显式：服务端跟随跳转到最终直链/CDN
     "resolve_strm_redirects": False,
+    # 默认：STRM 指向 127.0.0.1/私网网关时自动跟随到 CDN 直链（头显才能播）
+    "auto_resolve_private_strm": True,
     "media_url_cache_ttl": 300,
     # 本地视频扩展名（另始终支持 .strm）
     "video_extensions": [

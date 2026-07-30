@@ -14,7 +14,8 @@
     </div>
     <div class="actions">
       <a class="btn" href="deovr://{{ base }}/deovr/{{ movie.id }}">用 DeoVR 打开</a>
-      <a class="btn ghost" href="/play/{{ movie.id }}" target="_blank">直接播放链接</a>
+      <a class="btn ghost" href="{{ play_url }}" target="_blank" rel="noopener">直接播放（改写后）</a>
+      <a class="btn ghost" href="/play/{{ movie.id }}" target="_blank" rel="noopener">经本服务跳转</a>
     </div>
   </header>
 
@@ -55,6 +56,21 @@
       {% if movie.plot %}
       <p class="plot">{{ movie.plot }}</p>
       {% endif %}
+
+      <div class="play-urls">
+        <h3>播放地址</h3>
+        {% if raw_url %}
+        <p class="hint">STRM 原始（磁盘文件，不会被改写）：</p>
+        <p class="url-box"><code>{{ raw_url }}</code></p>
+        <p class="hint">客户端实际使用{% if play_changed %}（已 rewrite）{% else %}（与原始相同：公网直链或未开 rewrite）{% endif %}：</p>
+        <p class="url-box"><code>{{ play_url }}</code></p>
+        {% else %}
+        <p class="hint">本地文件，经本服务输出：</p>
+        <p class="url-box"><code>{{ play_url }}</code></p>
+        {% endif %}
+        <p class="hint">核对接口：<a href="/api/resolve/{{ movie.id }}" target="_blank"><code>/api/resolve/{{ movie.id }}</code></a></p>
+      </div>
+
       <p class="hint">网页浏览 <code>{{ base }}/browse</code> · DeoVR 请用 <code>{{ base }}/open</code></p>
     </div>
   </article>
