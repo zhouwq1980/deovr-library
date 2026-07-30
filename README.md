@@ -1,8 +1,11 @@
 # DeoVR Library
 
-本地媒体库 HTTP 服务：扫描 `.strm` / 本地视频 + Emby/Jellyfin/Kodi NFO，提供网页筛选与 DeoVR 播放。
+**主要用途：** 主流 VR 播放器（尤其是 DeoVR）对「媒体库」支持不足——有播放器、缺浏览与筛选。如果你已经用 **Emby / Jellyfin**（或同结构的 Kodi NFO 片库）整理好了影片，本工具可以**立刻**把现有库扫成符合 **DeoVR 播放器规范**的列表页与详情 JSON，头显里直接打开就能刷库、点播，而不必在 VR 里重新建库。
+
+同时提供电脑端网页筛选（演员 / 类型 / 片商 / 2D·VR），方便在手机或浏览器里找片。
 
 - **仅命令行**，无 GUI  
+- 复用已有 Emby/Jellyfin 目录（`.strm` / 本地视频 + NFO + 封面），**不搬家、不重刮**  
 - 个人片库路径 / 数据库 **不会** 上传到 GitHub（已 `.gitignore`）  
 - 完整说明见 **[使用手册.md](./使用手册.md)**
 
@@ -114,11 +117,12 @@ python run_cli.py serve --port 8765 --rewrite --rewrite-to <你的局域网IP>
 
 | 项目 | 说明 |
 |------|------|
+| 定位 | Emby/Jellyfin 已有库 → 一键变成 DeoVR 可用的媒体库页 |
 | 媒体 | `.strm`（HTTP 地址）+ `mp4/mkv/avi/mov/ts/m2ts/webm…` 本地文件 |
-| NFO | Kodi / Emby / Jellyfin 共用 XML |
+| NFO | Kodi / Emby / Jellyfin 共用 XML（直接吃现有刮削结果） |
 | 播放 | STRM → 改写后的直链；本地 → `/play/{id}` Range |
 | 网页 | 演员 / 类型 / 片商 / 2D·VR 筛选 |
-| DeoVR | `/deovr` 底栏 Tab 列表 + `/deovr/{id}` 详情 |
+| DeoVR | `/deovr` 底栏 Tab 列表 + `/deovr/{id}` 详情（播放器规范 JSON） |
 
 ---
 
