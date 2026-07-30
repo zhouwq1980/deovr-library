@@ -44,8 +44,12 @@ def scan_library(
 
     lib_id = db.upsert_library(name, str(root), kind)
     exts = tuple(video_exts) if video_exts else DEFAULT_VIDEO_EXTS
+    if progress:
+        progress(f"枚举文件: {name} …", 0, 0)
     media_files = collect_media_files(root, exts)
     total = len(media_files)
+    if progress:
+        progress(f"开始入库 {name}（共 {total}）", 0, max(total, 1))
     added = updated = skipped = 0
     keep: set[str] = set()
     t0 = time.time()
@@ -60,7 +64,7 @@ def scan_library(
             existing[r["strm_path"]] = (int(r["id"]), r["strm_mtime"], r["nfo_mtime"])
 
     for i, media in enumerate(media_files, 1):
-        if progress and (i % 20 == 0 or i == total or i == 1):
+        if progress and (i % 5 == 0 or i == total or i == 1):
             progress(f"扫描 {name}: {media.parent.name}", i, total)
 
         media_path = str(media.resolve())

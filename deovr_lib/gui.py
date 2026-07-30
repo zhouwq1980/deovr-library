@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import queue
 import socket
 import threading
 import traceback
@@ -253,6 +254,7 @@ class LibraryGUI:
         self.server: Any = None
         self.scanning = False
         self._lib_rows: list[dict[str, str]] = []
+        self._ui_q: queue.Queue = queue.Queue()
 
         self.host_var = StringVar(value=str(self.cfg.get("host", "0.0.0.0")))
         self.port_var = StringVar(value=str(self.cfg.get("port", 8765)))
@@ -277,6 +279,23 @@ class LibraryGUI:
         self._build()
         self._reload_libs()
         self._refresh_stats()
+        self.root.after(50, self._drain_ui_queue)
+
+    def _ui(self, fn: Any) -> None:
+        """线程安全投递到主线程（勿在后台线程直接 root.after）。"""
+        self._ui_q.put(fn)
+
+    def _drain_ui_queue(self) -> None:
+        try:
+            while True:
+                fn = self._ui_q.get_nowait()
+                try:
+                    fn()
+                except Exception:
+                    traceback.print_exc()
+        except queue.Empty:
+            pass
+        self.root.after(50, self._drain_ui_queue)
 
     @staticmethod
     def _detect_ip() -> str:
@@ -739,26 +758,36 @@ class LibraryGUI:
             messagebox.showwarning("提示", "请先设置 2D/VR 或添加媒体目录")
             return
         self.scanning = True
-        self.prog_lbl.config(text="进度: 0%")
+        self.prog_lbl.config(text="进度: 0%（正在枚举文件…）")
         self.scan_log.config(text="开始扫描…")
-        video_exts = self.cfg.get("video_extensions")
+        self.status_var.set("扫描中…")
+        video_exts = list(self.cfg.get("video_extensions") or [])
+        force = bool(self.force_var.get())
+        # 拷贝列表，避免后台线程读到被改动的结构
+        libs_snap = [dict(x) for x in libs]
 
         def progress(msg: str, cur: int, total: int) -> None:
             def ui() -> None:
-                pct = int(100 * cur / max(total, 1))
-                self.prog_lbl.config(text=f"进度: {pct}% ({cur}/{total})")
+                if total <= 0:
+                    self.prog_lbl.config(text=f"进度: … {msg}")
+                else:
+                    pct = int(100 * cur / max(total, 1))
+                    self.prog_lbl.config(text=f"进度: {pct}% ({cur}/{total})")
                 self.scan_log.config(text=msg)
                 self.status_var.set(msg)
 
-            self.root.after(0, ui)
+            self._ui(ui)
 
         def worker() -> None:
             try:
+                # 独立 Database，避免与主线程/HTTP 服务抢同一对象
+                db = Database(DEFAULT_DB)
+                progress("正在枚举媒体文件…", 0, 0)
                 results = scan_all(
-                    self.db,
-                    libs,
-                    force=self.force_var.get(),
-                    video_exts=video_exts,
+                    db,
+                    libs_snap,
+                    force=force,
+                    video_exts=video_exts or None,
                     progress=progress,
                 )
                 lines = []
@@ -771,27 +800,29 @@ class LibraryGUI:
                         f"+{r['added']} ~{r['updated']} skip={r['skipped']} "
                         f"-{r['removed']} ({r['elapsed']}s)"
                     )
-                text = "扫描完成 · " + " | ".join(lines)
+                text = "扫描完成 · " + (" | ".join(lines) if lines else "无结果")
 
                 def done() -> None:
                     self.scanning = False
+                    self.db = Database(DEFAULT_DB)
                     self.prog_lbl.config(text="进度: 100%")
                     self.scan_log.config(text=text)
                     self._refresh_stats()
                     messagebox.showinfo("完成", text)
 
-                self.root.after(0, done)
+                self._ui(done)
             except Exception:
                 err = traceback.format_exc()
 
                 def fail() -> None:
                     self.scanning = False
                     self.scan_log.config(text="扫描失败")
+                    self.status_var.set("扫描失败")
                     messagebox.showerror("扫描失败", err)
 
-                self.root.after(0, fail)
+                self._ui(fail)
 
-        threading.Thread(target=worker, daemon=True).start()
+        threading.Thread(target=worker, daemon=True, name="deovr-scan").start()
 
     def _lan_ip(self) -> str:
         return self.rewrite_to_var.get().strip() or self._detect_ip() or "127.0.0.1"
