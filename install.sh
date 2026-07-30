@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# DeoVR Library — 一键下载完整初始项目
+# DeoVR Library — 一键下载 / 覆盖更新核心项目文件
 #
 #   curl -fsSL https://raw.githubusercontent.com/zhouwq1980/deovr-library/main/install.sh | bash
 #
-# 只负责：拉取仓库 → 创建虚拟环境 → 安装依赖 → 初始化空配置。
-# 片库目录 / 扫描 / 启服务请用图形界面：python run_gui.py
+# 已有项目：覆盖安装所有核心源码/文档/脚本；保留本地数据：
+#   data/config.json、data/library.db*、data/thumbs/、.venv/
+# 片库配置 / 扫描 / 启服务请用：python run_gui.py
 set -euo pipefail
 
 REPO="${DEOVR_LIBRARY_REPO:-zhouwq1980/deovr-library}"
@@ -17,7 +18,7 @@ GIT_URL="https://github.com/${REPO}.git"
 PY="${PYTHON:-}"
 FORCE_REMOTE=0
 SKIP_DEPS=0
-UPDATE=0
+KEEP_CODE=0
 FORCE_OVERWRITE=0
 
 usage() {
@@ -27,23 +28,22 @@ usage() {
   curl -fsSL ${RAW_BASE}/install.sh | bash -s -- [选项]
   ./install.sh [选项]
 
-一键安装 = 下载完整初始项目到本机（默认 ~/deovr-library），并装好 Python 依赖。
-若目标目录已有项目：默认保留原文件，不覆盖、不删除、不强制 git pull。
-配置片库、扫描、启动请用 GUI：python run_gui.py
+一键安装到 ~/deovr-library（可用 --dir 改）：
+  · 首次：下载完整项目并安装依赖
+  · 已有项目：覆盖更新全部核心文件（源码/脚本/文档等）
+  · 始终保留本地数据：data/config.json、library.db、thumbs/、.venv/
 
 选项:
   --dir PATH        安装目录（默认 ~/deovr-library）
   --python PATH     指定 Python（默认 python3）
-  --skip-deps       只下载/复用项目，不创建 venv / 不装依赖
-  --update          已有 git 仓库时尝试 pull 更新代码（仍不删 data/ 等本地数据）
+  --skip-deps       不创建/更新 venv 依赖
+  --keep-code       已有项目时不覆盖核心文件（仅补依赖）
   --force           目录已占用且不是本项目时，允许清空后重装（危险）
-  --remote          强制远程拉取到 --dir（忽略当前目录）
+  --remote          强制按 --dir 远程安装（忽略当前目录）
   -h, --help        显示帮助
 
 环境变量:
-  DEOVR_LIBRARY_HOME    安装目录（同 --dir）
-  DEOVR_LIBRARY_REPO    GitHub 仓库 owner/name
-  DEOVR_LIBRARY_BRANCH  分支（默认 main）
+  DEOVR_LIBRARY_HOME / DEOVR_LIBRARY_REPO / DEOVR_LIBRARY_BRANCH
 EOF
 }
 
@@ -52,17 +52,21 @@ while [[ $# -gt 0 ]]; do
     --dir) INSTALL_DIR="${2:-}"; shift 2 ;;
     --python) PY="${2:-}"; shift 2 ;;
     --skip-deps) SKIP_DEPS=1; shift ;;
-    --update) UPDATE=1; shift ;;
+    --keep-code) KEEP_CODE=1; shift ;;
     --force) FORCE_OVERWRITE=1; shift ;;
     --remote) FORCE_REMOTE=1; shift ;;
+    --update)
+      # 兼容旧参数：现在默认就会覆盖更新核心文件
+      echo "提示: 已默认覆盖更新核心文件，--update 可省略"
+      shift
+      ;;
     -h|--help) usage; exit 0 ;;
-    # 兼容旧参数：忽略并提示（避免老文档一键命令直接失败）
     --2d|--vr|--rewrite-to|--port)
-      echo "提示: 已忽略旧选项 $1（一键安装只下载项目；请用 GUI 配置）"
+      echo "提示: 已忽略旧选项 $1（请用 GUI 配置）"
       shift 2 2>/dev/null || shift
       ;;
     --clear-2d|--clear-vr|--reset|--demo|--serve|--skip-scan)
-      echo "提示: 已忽略旧选项 $1（一键安装只下载项目；请用 GUI 配置）"
+      echo "提示: 已忽略旧选项 $1（请用 GUI 配置）"
       shift
       ;;
     *) echo "未知参数: $1"; usage; exit 1 ;;
@@ -74,7 +78,7 @@ INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 echo ""
 echo "=============================="
 echo " DeoVR Library 一键安装"
-echo " 下载完整初始项目"
+echo " 核心文件覆盖 · 本地数据保留"
 echo "=============================="
 echo ""
 
@@ -99,19 +103,6 @@ resolve_root() {
   echo ""
 }
 
-prompt() {
-  local msg="$1"
-  local reply=""
-  if [[ -r /dev/tty ]]; then
-    printf "%s" "$msg" > /dev/tty
-    IFS= read -r reply < /dev/tty || true
-  elif [[ -t 0 ]]; then
-    printf "%s" "$msg"
-    IFS= read -r reply || true
-  fi
-  printf "%s" "$reply"
-}
-
 ensure_tools() {
   if ! command -v curl >/dev/null 2>&1; then
     echo "需要 curl。"
@@ -123,47 +114,122 @@ ensure_tools() {
   fi
 }
 
+# 从 GitHub ZIP 覆盖核心文件，显式跳过本地数据
+overlay_core_from_zip() {
+  local dest="$1"
+  local tmp zipdir extracted
+  ensure_tools
+  if ! command -v unzip >/dev/null 2>&1; then
+    echo "覆盖核心文件需要 unzip（或改用带 .git 的安装以便 git reset）"
+    return 1
+  fi
+  echo "==> 下载最新核心文件并覆盖安装…"
+  tmp="$(mktemp -d)"
+  zipdir="$tmp/repo.zip"
+  curl -fSL --progress-bar "$ZIP_URL" -o "$zipdir"
+  unzip -q "$zipdir" -d "$tmp"
+  extracted="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  if [[ -z "$extracted" || ! -d "$extracted" ]]; then
+    rm -rf "$tmp"
+    echo "ZIP 解压失败"
+    return 1
+  fi
+
+  mkdir -p "$dest/data"
+
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a \
+      --exclude '.venv/' \
+      --exclude 'data/config.json' \
+      --exclude 'data/library.db' \
+      --exclude 'data/library.db-'* \
+      --exclude 'data/thumbs/' \
+      --exclude '.git/' \
+      "$extracted"/ "$dest"/
+  else
+    # 无 rsync：逐项覆盖核心路径，不动本地 data 私有文件与 .venv
+    local item
+    for item in "$extracted"/* "$extracted"/.[!.]*; do
+      [[ -e "$item" ]] || continue
+      local base
+      base="$(basename "$item")"
+      case "$base" in
+        .venv|.git) continue ;;
+        data)
+          mkdir -p "$dest/data"
+          local f
+          for f in "$item"/*; do
+            [[ -e "$f" ]] || continue
+            local bn
+            bn="$(basename "$f")"
+            case "$bn" in
+              config.json|library.db|thumbs) continue ;;
+            esac
+            [[ "$bn" == library.db-* ]] && continue
+            rm -rf "$dest/data/$bn"
+            cp -R "$f" "$dest/data/$bn"
+          done
+          ;;
+        *)
+          rm -rf "$dest/$base"
+          cp -R "$item" "$dest/$base"
+          ;;
+      esac
+    done
+  fi
+
+  rm -rf "$tmp"
+  echo "==> 核心文件已覆盖；已保留 data/config.json、library.db、thumbs/、.venv/"
+}
+
+# 已有项目：用 git 硬重置到远端，覆盖全部已跟踪核心文件；gitignore 本地数据不受影响
+update_core_files() {
+  local dest="$1"
+  if [[ "$KEEP_CODE" -eq 1 ]]; then
+    echo "==> --keep-code：跳过核心文件覆盖"
+    return 0
+  fi
+
+  echo "==> 已有项目：覆盖安装核心文件（保留本地 data/ 与 .venv）"
+
+  if [[ -d "$dest/.git" ]] && command -v git >/dev/null 2>&1; then
+    if git -C "$dest" remote get-url origin >/dev/null 2>&1; then
+      echo "==> git fetch + reset --hard origin/$BRANCH"
+      if git -C "$dest" fetch --depth 1 origin "$BRANCH" \
+        && git -C "$dest" checkout -q "$BRANCH" 2>/dev/null \
+        && git -C "$dest" reset --hard "origin/$BRANCH"; then
+        echo "==> 核心文件已用 git 覆盖更新"
+        return 0
+      fi
+      echo "git 更新失败，改用 ZIP 覆盖核心文件…"
+    fi
+  fi
+
+  overlay_core_from_zip "$dest"
+}
+
 fetch_repo() {
   ensure_tools
   echo "==> 安装目录: $INSTALL_DIR"
 
-  # 已是完整项目：默认原样复用，绝不覆盖本地文件
   if is_repo_root "$INSTALL_DIR"; then
-    echo "==> 检测到已有项目，保留原文件（不覆盖）"
-    if [[ "$UPDATE" -eq 1 ]]; then
-      if [[ -d "$INSTALL_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
-        echo "==> --update：尝试 git pull（不删除 data/ 等未跟踪本地数据）"
-        git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" 2>/dev/null || true
-        if git -C "$INSTALL_DIR" rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
-          git -C "$INSTALL_DIR" checkout -q "$BRANCH" 2>/dev/null || true
-          git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH" || {
-            echo "git pull 失败，继续使用现有代码（未覆盖）。"
-          }
-        fi
-      else
-        echo "无 git 元数据，跳过 --update（保留现有文件）。"
-      fi
-    else
-      echo "    如需拉取最新代码可加: bash -s -- --update"
-    fi
+    update_core_files "$INSTALL_DIR"
     return
   fi
 
-  # 目录已存在但不是本项目：默认不删、不覆盖
   if [[ -e "$INSTALL_DIR" ]]; then
     if [[ -d "$INSTALL_DIR" ]] && [[ -z "$(ls -A "$INSTALL_DIR" 2>/dev/null || true)" ]]; then
-      : # 空目录，可以装进去
+      :
     else
       if [[ "$FORCE_OVERWRITE" -eq 1 ]]; then
-        echo "==> --force：将清空后重装 $INSTALL_DIR"
+        echo "==> --force：清空后重装 $INSTALL_DIR"
         rm -rf "$INSTALL_DIR"
       else
-        echo "❌ 目录已存在且不是 DeoVR Library 项目（或文件不完整）:"
+        echo "❌ 目录已存在且不是 DeoVR Library 项目:"
         echo "   $INSTALL_DIR"
-        echo "为避免覆盖原文件，已中止。"
-        echo "可选："
-        echo "  1) 换目录:  bash -s -- --dir ~/deovr-library-new"
-        echo "  2) 确认清空重装（危险）:  bash -s -- --force"
+        echo "为避免误删其它文件，已中止。"
+        echo "  换目录: bash -s -- --dir ~/deovr-library-new"
+        echo "  或强制清空: bash -s -- --force"
         exit 1
       fi
     fi
@@ -194,11 +260,16 @@ fetch_repo() {
 
 ROOT="$(resolve_root)"
 if [[ -z "$ROOT" ]]; then
-  echo "==> 远程下载模式"
+  echo "==> 远程安装模式"
   fetch_repo
   ROOT="$INSTALL_DIR"
 else
   echo "==> 本地仓库模式: $ROOT"
+  # 在已有 clone 里执行 ./install.sh 时同样覆盖核心文件
+  if [[ "$KEEP_CODE" -eq 0 ]]; then
+    ensure_tools
+    update_core_files "$ROOT"
+  fi
 fi
 
 cd "$ROOT"
@@ -208,8 +279,7 @@ if [[ "$SKIP_DEPS" -eq 1 ]]; then
   echo
   echo "✅ 项目已就绪 → $ROOT"
   echo "  （已跳过依赖安装）"
-  echo "  手动: cd \"$ROOT\" && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
-  echo "  然后: python run_gui.py"
+  echo "  然后: cd \"$ROOT\" && source .venv/bin/activate && python run_gui.py"
   exit 0
 fi
 
@@ -258,7 +328,7 @@ python -m pip install -U pip wheel >/dev/null
 echo "==> 安装/更新依赖"
 python -m pip install -r requirements.txt
 if [[ -f data/config.json ]]; then
-  echo "==> 已有 data/config.json，跳过 init（保留本地配置）"
+  echo "==> 已有 data/config.json，跳过 init（保留本地片库配置）"
 else
   echo "==> 初始化空配置"
   python run_cli.py init >/dev/null || true
@@ -266,19 +336,13 @@ fi
 
 echo
 echo "✅ 项目就绪 → $ROOT"
-if is_repo_root "$ROOT"; then
-  echo "  （已有项目时默认不覆盖源码与本地 data/）"
-fi
+echo "  核心文件：已覆盖为 GitHub 最新"
+echo "  本地保留：data/config.json · library.db · thumbs/ · .venv/"
 echo
 echo "接下来用图形界面配置片库并启动："
 echo "  cd \"$ROOT\""
 echo "  source .venv/bin/activate"
 echo "  python run_gui.py"
 echo
-echo "命令行亦可："
-echo "  python run_cli.py library set-2d --path \"/你的/2D目录\""
-echo "  python run_cli.py scan --force"
-echo "  python run_cli.py serve --port 8765"
-echo
-echo "再次更新项目："
+echo "再次覆盖更新核心文件："
 echo "  curl -fsSL ${RAW_BASE}/install.sh | bash"
