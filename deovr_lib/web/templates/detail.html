@@ -22,7 +22,7 @@
   <article class="detail">
     <div class="poster-wrap">
       {% if movie.poster_path %}
-      <img src="/cover/{{ movie.id }}?full=1" alt="poster" />
+      <img src="/cover/{{ movie.id }}?full=1&v={{ movie.cover_token }}" alt="poster" />
       {% else %}
       <div class="no-poster">无封面</div>
       {% endif %}

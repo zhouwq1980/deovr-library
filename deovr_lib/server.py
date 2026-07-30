@@ -21,7 +21,7 @@ from .media import (
     rewrite_loopback,
 )
 from .nfo import is_http_url, media_content_type, read_strm
-from .thumbs import ensure_thumb
+from .thumbs import ensure_thumb, thumb_cache_token
 
 WEB_DIR = Path(__file__).parent / "web"
 _jinja = Environment(
@@ -479,6 +479,8 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         movie = database.get_movie(movie_id)
         if not movie:
             raise HTTPException(404, "未找到影片")
+        movie = dict(movie)
+        movie["cover_token"] = thumb_cache_token(movie.get("poster_path"), movie_id)
         raw = strm_raw_url(movie)
         play = media_url_for_client(request, movie) or f"{base_url(request)}/play/{movie_id}"
         return _render(
@@ -503,7 +505,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         page: int = Query(1, ge=1),
         page_size: int = Query(48, ge=1, le=200),
     ):
-        return database.search_movies(
+        data = database.search_movies(
             q=q,
             actor=actor,
             genre=genre,
@@ -515,6 +517,9 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             page=page,
             page_size=page_size,
         )
+        for item in data.get("items") or []:
+            item["cover_token"] = thumb_cache_token(item.get("poster_path"), int(item["id"]))
+        return data
 
     @app.get("/api/facets")
     async def api_facets():
@@ -548,12 +553,19 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             path = poster
         else:
             thumb = ensure_thumb(poster, movie_id, int(config.get("thumb_max_width") or 480))
-            path = str(thumb)
+            path = str(thumb) if thumb else poster
+        token = thumb_cache_token(poster, movie_id)
+        try:
+            mtime = Path(path).stat().st_mtime
+        except OSError:
+            mtime = 0
         return FileResponse(
             path,
             media_type="image/jpeg",
             headers={
-                "Cache-Control": "public, max-age=86400",
+                # 列表缩略图易因旧缓存显示错图；用 ETag/短缓存 + 前端 token 防呆
+                "Cache-Control": "public, max-age=300, must-revalidate",
+                "ETag": f'"{token}-{int(mtime)}-{"f" if full else "t"}"',
                 "Access-Control-Allow-Origin": "*",
             },
         )
