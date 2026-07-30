@@ -4,7 +4,7 @@
 
 同时提供电脑端网页筛选（演员 / 类型 / 片商 / 2D·VR），方便在手机或浏览器里找片。
 
-- **命令行 + 图形管理器（GUI）**  
+- **图形管理器（GUI）+ 命令行**  
 - 复用已有 Emby/Jellyfin 目录（`.strm` / 本地视频 + NFO + 封面），**不搬家、不重刮**  
 - 个人片库路径 / 数据库 **不会** 上传到 GitHub（已 `.gitignore`）  
 - 完整说明见 **[使用手册.md](./使用手册.md)**
@@ -13,17 +13,25 @@
 
 ---
 
-## 图形管理器（推荐日常使用）
+## 一键安装（只下载完整初始项目）
 
-装好依赖后：
+macOS 推荐。默认装到 `~/deovr-library`（含源码、`testdata`、依赖环境）：
 
 ```bash
-cd ~/deovr-library   # 或本仓库目录
+curl -fsSL https://raw.githubusercontent.com/zhouwq1980/deovr-library/main/install.sh | bash
+```
+
+然后启动图形界面配置片库：
+
+```bash
+cd ~/deovr-library
 source .venv/bin/activate
 python run_gui.py
 ```
 
-窗口里可完成：设 2D/VR 目录、扫描、改写 IP、启停服务、打开网页 / 复制 DeoVR 地址。
+在 GUI 里：选 2D/VR 目录 → 扫描 → 填改写 IP → 启动服务 → 打开网页 / 复制 DeoVR 地址。
+
+> 一键安装**不再**在脚本里配目录或启动服务；这些都在 GUI（或 CLI）完成。
 
 ---
 
@@ -37,85 +45,34 @@ python run_gui.py
 
 ---
 
-## 30 秒上手（macOS）
+## 日常：GUI 或命令行
 
-无需先 clone，默认装到 `~/deovr-library`：
-
-```bash
-# 空白 Demo 并启动服务
-curl -fsSL https://raw.githubusercontent.com/zhouwq1980/deovr-library/main/install.sh | bash -s -- --demo --serve
-```
-
-浏览器打开：http://127.0.0.1:8765/browse  
-
-接入自己的片库：
+### 图形管理器（推荐）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zhouwq1980/deovr-library/main/install.sh | bash -s -- \
-  --2d ~/Movies/2D --vr ~/Movies/VR --rewrite-to 192.168.0.34 --serve
-```
-
-> 带参数时必须用 `bash -s --`，否则参数不会传给脚本。
-
-已 clone 本地时：`./install.sh --demo --serve`
-
----
-
-## 日常：增删改 2D / VR 目录
-
-先进入安装目录并激活环境：
-
-```bash
-cd ~/deovr-library   # 或你的 clone 路径
+cd ~/deovr-library
 source .venv/bin/activate
+python run_gui.py
 ```
 
-### 查看
+### 命令行增删改 2D / VR
 
 ```bash
+cd ~/deovr-library && source .venv/bin/activate
+
 python run_cli.py library list
-```
-
-### 增 / 改（固定槽位，再设即覆盖）
-
-```bash
 python run_cli.py library set-2d --path "/Users/你/AV-2D"
 python run_cli.py library set-vr --path "/Users/你/AV-VR"
-python run_cli.py scan --force
-```
-
-### 删（注意写法）
-
-```bash
-# ✅ 正确：子命令 remove，后面直接跟「名称」或「完整路径」
-python run_cli.py library remove AV-2D
-python run_cli.py library remove "/Users/你/路径/testdata/Movies"
-
-# ✅ 清掉整个固定 2D / VR 槽位（会去掉该 kind 下的项）
+python run_cli.py library remove 名称或完整路径
 python run_cli.py library clear-2d
 python run_cli.py library clear-vr
-
-# ❌ 错误（会报 invalid choice）
-# python run_cli.py library --remove 2D
-# python run_cli.py library --remove --path /xxx
+python run_cli.py scan --force
+python run_cli.py serve --port 8765
 ```
-
-### 额外添加多个目录（不占固定槽位名）
-
-```bash
-python run_cli.py library add --path "/path/to/Extra" --name Extra --kind 2d
-python run_cli.py library remove Extra
-```
-
-改完目录务必：`python run_cli.py scan --force`
 
 ---
 
-## 启动 / 访问
-
-```bash
-python run_cli.py serve --port 8765 --rewrite --rewrite-to <你的局域网IP>
-```
+## 访问地址
 
 | 用途 | 地址 |
 |------|------|
@@ -134,29 +91,33 @@ python run_cli.py serve --port 8765 --rewrite --rewrite-to <你的局域网IP>
 | 定位 | Emby/Jellyfin 已有库 → 一键变成 DeoVR 可用的媒体库页 |
 | 媒体 | `.strm`（HTTP 地址）+ `mp4/mkv/avi/mov/ts/m2ts/webm…` 本地文件 |
 | NFO | Kodi / Emby / Jellyfin 共用 XML（直接吃现有刮削结果） |
-| 播放 | STRM → 改写后的直链；本地 → `/play/{id}` Range |
+| 播放 | STRM → 改写/解析后的直链；本地 → `/play/{id}` Range |
 | 网页 | 演员 / 类型 / 片商 / 2D·VR 筛选 |
 | DeoVR | `/deovr` 底栏 Tab 列表 + `/deovr/{id}` 详情（播放器规范 JSON） |
+| 管理 | `python run_gui.py` 图形界面 |
 
 ---
 
 ## 常用命令速查
 
 ```bash
+python run_gui.py                       # 图形管理器
 python run_cli.py init --reset          # 清空配置/库/封面，重来
 python run_cli.py demo                  # 用 testdata 示例片库
 python run_cli.py library list
 python run_cli.py library set-2d --path DIR
 python run_cli.py library set-vr --path DIR
 python run_cli.py library remove 名称或路径
-python run_cli.py library clear-2d|clear-vr
-python run_cli.py config --detect-ip
 python run_cli.py config --rewrite --rewrite-to 192.168.0.18
 python run_cli.py scan --force
 python run_cli.py serve --port 8765
 ```
 
-`install.sh` 常用选项：`--2d` `--vr` `--clear-2d` `--clear-vr` `--rewrite-to` `--reset` `--demo` `--serve` `--dir` `--skip-scan`
+更新项目：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zhouwq1980/deovr-library/main/install.sh | bash
+```
 
 ---
 
@@ -165,6 +126,6 @@ python run_cli.py serve --port 8765
 | 会上传 | 不会上传（已 .gitignore） |
 |--------|---------------------------|
 | 源码、`testdata/` 示例、`data/config.example.json` | `data/config.json` |
-| README / 使用手册 / `install.sh` | `data/library.db`、`data/thumbs/`、`.venv` |
+| README / 使用手册 / `install.sh` / GUI | `data/library.db`、`data/thumbs/`、`.venv` |
 
-更细的 NFO、目录结构、改写规则、FAQ 见 **[使用手册.md](./使用手册.md)**。
+更细说明见 **[使用手册.md](./使用手册.md)**。
