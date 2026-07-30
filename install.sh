@@ -17,6 +17,8 @@ GIT_URL="https://github.com/${REPO}.git"
 PY="${PYTHON:-}"
 FORCE_REMOTE=0
 SKIP_DEPS=0
+UPDATE=0
+FORCE_OVERWRITE=0
 
 usage() {
   cat <<EOF
@@ -26,12 +28,15 @@ usage() {
   ./install.sh [选项]
 
 一键安装 = 下载完整初始项目到本机（默认 ~/deovr-library），并装好 Python 依赖。
+若目标目录已有项目：默认保留原文件，不覆盖、不删除、不强制 git pull。
 配置片库、扫描、启动请用 GUI：python run_gui.py
 
 选项:
   --dir PATH        安装目录（默认 ~/deovr-library）
   --python PATH     指定 Python（默认 python3）
-  --skip-deps       只下载项目，不创建 venv / 不装依赖
+  --skip-deps       只下载/复用项目，不创建 venv / 不装依赖
+  --update          已有 git 仓库时尝试 pull 更新代码（仍不删 data/ 等本地数据）
+  --force           目录已占用且不是本项目时，允许清空后重装（危险）
   --remote          强制远程拉取到 --dir（忽略当前目录）
   -h, --help        显示帮助
 
@@ -47,10 +52,12 @@ while [[ $# -gt 0 ]]; do
     --dir) INSTALL_DIR="${2:-}"; shift 2 ;;
     --python) PY="${2:-}"; shift 2 ;;
     --skip-deps) SKIP_DEPS=1; shift ;;
+    --update) UPDATE=1; shift ;;
+    --force) FORCE_OVERWRITE=1; shift ;;
     --remote) FORCE_REMOTE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     # 兼容旧参数：忽略并提示（避免老文档一键命令直接失败）
-    --2d|--vr|--rewrite-to|--port|--python)
+    --2d|--vr|--rewrite-to|--port)
       echo "提示: 已忽略旧选项 $1（一键安装只下载项目；请用 GUI 配置）"
       shift 2 2>/dev/null || shift
       ;;
@@ -120,31 +127,46 @@ fetch_repo() {
   ensure_tools
   echo "==> 安装目录: $INSTALL_DIR"
 
+  # 已是完整项目：默认原样复用，绝不覆盖本地文件
   if is_repo_root "$INSTALL_DIR"; then
-    echo "==> 已存在项目，尝试更新…"
-    if [[ -d "$INSTALL_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
-      git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" 2>/dev/null || true
-      if git -C "$INSTALL_DIR" rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
-        git -C "$INSTALL_DIR" checkout -q "$BRANCH" 2>/dev/null || true
-        git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH" || {
-          echo "git pull 失败，保留现有代码继续。"
-        }
+    echo "==> 检测到已有项目，保留原文件（不覆盖）"
+    if [[ "$UPDATE" -eq 1 ]]; then
+      if [[ -d "$INSTALL_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
+        echo "==> --update：尝试 git pull（不删除 data/ 等未跟踪本地数据）"
+        git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" 2>/dev/null || true
+        if git -C "$INSTALL_DIR" rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
+          git -C "$INSTALL_DIR" checkout -q "$BRANCH" 2>/dev/null || true
+          git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH" || {
+            echo "git pull 失败，继续使用现有代码（未覆盖）。"
+          }
+        fi
+      else
+        echo "无 git 元数据，跳过 --update（保留现有文件）。"
       fi
     else
-      echo "无 git 元数据，跳过更新（保留现有文件）。"
+      echo "    如需拉取最新代码可加: bash -s -- --update"
     fi
     return
   fi
 
-  if [[ -e "$INSTALL_DIR" ]] && [[ ! -d "$INSTALL_DIR" || -n "$(ls -A "$INSTALL_DIR" 2>/dev/null || true)" ]]; then
-    local ans
-    ans="$(prompt "目录已存在且非空: $INSTALL_DIR ，是否覆盖安装？(y/N) ")"
-    echo ""
-    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
-      echo "取消安装"
-      exit 0
+  # 目录已存在但不是本项目：默认不删、不覆盖
+  if [[ -e "$INSTALL_DIR" ]]; then
+    if [[ -d "$INSTALL_DIR" ]] && [[ -z "$(ls -A "$INSTALL_DIR" 2>/dev/null || true)" ]]; then
+      : # 空目录，可以装进去
+    else
+      if [[ "$FORCE_OVERWRITE" -eq 1 ]]; then
+        echo "==> --force：将清空后重装 $INSTALL_DIR"
+        rm -rf "$INSTALL_DIR"
+      else
+        echo "❌ 目录已存在且不是 DeoVR Library 项目（或文件不完整）:"
+        echo "   $INSTALL_DIR"
+        echo "为避免覆盖原文件，已中止。"
+        echo "可选："
+        echo "  1) 换目录:  bash -s -- --dir ~/deovr-library-new"
+        echo "  2) 确认清空重装（危险）:  bash -s -- --force"
+        exit 1
+      fi
     fi
-    rm -rf "$INSTALL_DIR"
   fi
 
   mkdir -p "$(dirname "$INSTALL_DIR")"
@@ -226,18 +248,27 @@ echo "==> 项目: $ROOT"
 if [[ ! -d .venv ]]; then
   echo "==> 创建虚拟环境 .venv"
   "$PY_BIN" -m venv .venv
+else
+  echo "==> 复用已有虚拟环境 .venv"
 fi
 
 # shellcheck disable=SC1091
 source .venv/bin/activate
 python -m pip install -U pip wheel >/dev/null
-echo "==> 安装依赖"
+echo "==> 安装/更新依赖"
 python -m pip install -r requirements.txt
-echo "==> 初始化空配置"
-python run_cli.py init >/dev/null || true
+if [[ -f data/config.json ]]; then
+  echo "==> 已有 data/config.json，跳过 init（保留本地配置）"
+else
+  echo "==> 初始化空配置"
+  python run_cli.py init >/dev/null || true
+fi
 
 echo
-echo "✅ 完整初始项目已就绪 → $ROOT"
+echo "✅ 项目就绪 → $ROOT"
+if is_repo_root "$ROOT"; then
+  echo "  （已有项目时默认不覆盖源码与本地 data/）"
+fi
 echo
 echo "接下来用图形界面配置片库并启动："
 echo "  cd \"$ROOT\""

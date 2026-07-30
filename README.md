@@ -21,6 +21,9 @@ macOS 推荐。默认装到 `~/deovr-library`（含源码、`testdata`、依赖�
 curl -fsSL https://raw.githubusercontent.com/zhouwq1980/deovr-library/main/install.sh | bash
 ```
 
+**已有项目时不会覆盖原文件**（不删目录、默认不 `git pull`）。只会复用目录并补齐依赖；本地 `data/config.json` 也会保留。  
+若要拉取最新代码：`bash -s -- --update`（仍不删 `data/` 等本地数据）。
+
 然后启动图形界面配置片库：
 
 ```bash
