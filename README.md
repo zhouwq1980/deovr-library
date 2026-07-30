@@ -4,12 +4,26 @@
 
 同时提供电脑端网页筛选（演员 / 类型 / 片商 / 2D·VR），方便在手机或浏览器里找片。
 
-- **仅命令行**，无 GUI  
+- **命令行 + 图形管理器（GUI）**  
 - 复用已有 Emby/Jellyfin 目录（`.strm` / 本地视频 + NFO + 封面），**不搬家、不重刮**  
 - 个人片库路径 / 数据库 **不会** 上传到 GitHub（已 `.gitignore`）  
 - 完整说明见 **[使用手册.md](./使用手册.md)**
 
 仓库：https://github.com/zhouwq1980/deovr-library
+
+---
+
+## 图形管理器（推荐日常使用）
+
+装好依赖后：
+
+```bash
+cd ~/deovr-library   # 或本仓库目录
+source .venv/bin/activate
+python run_gui.py
+```
+
+窗口里可完成：设 2D/VR 目录、扫描、改写 IP、启停服务、打开网页 / 复制 DeoVR 地址。
 
 ---
 
