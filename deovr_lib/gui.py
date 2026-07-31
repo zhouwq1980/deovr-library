@@ -853,7 +853,7 @@ class LibraryGUI:
                     lines.append(
                         f"{r['library']}: media={r.get('total_media', r.get('total_strm', 0))} "
                         f"+{r['added']} ~{r['updated']} skip={r['skipped']} "
-                        f"-{r['removed']} ({r['elapsed']}s)"
+                        f"stack={r.get('stacked_away', 0)} -{r['removed']} ({r['elapsed']}s)"
                     )
                 text = "扫描完成 · " + (" | ".join(lines) if lines else "无结果")
 

@@ -47,12 +47,51 @@ _CODE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Emby/Kodi 多分盘后缀：-cd1 / .cd2 / _DISC3 / -part2 / -pt1 等（不含剧集 -E01）
+_DISC_RE = re.compile(
+    r"(?i)[._\-\s]*(?:cd|disc|disk|dvd|part|pt)[._\-\s]*0*(\d+)$"
+)
+
+
+def split_disc_stem(stem: str) -> tuple[str, int | None]:
+    """返回 (去掉分盘后缀的基名, 盘号或 None)。"""
+    s = (stem or "").strip()
+    if not s:
+        return "", None
+    m = _DISC_RE.search(s)
+    if not m:
+        return s, None
+    base = s[: m.start()].rstrip("._- \t")
+    return (base or s), int(m.group(1))
+
+
+def strip_disc_label(text: str) -> str:
+    """标题/番号上去掉 CD1/CD2 等分盘标记。"""
+    base, part = split_disc_stem(text or "")
+    return base if part is not None else (text or "")
+
 
 def extract_code(text: str) -> str:
     if not text:
         return ""
-    m = _CODE_RE.search(text.upper().replace("_", "-"))
+    # 先去掉分盘后缀，避免 ABC-123-CD2 被当成独立番号
+    cleaned = strip_disc_label(text)
+    m = _CODE_RE.search(cleaned.upper().replace("_", "-"))
     return m.group(1).upper() if m else ""
+
+
+def pick_primary_disc(files: list[Path]) -> Path:
+    """多分盘里优先 CD1；有无后缀主文件时优先主文件。"""
+    if len(files) == 1:
+        return files[0]
+
+    def sort_key(p: Path) -> tuple[int, int, str]:
+        disc = split_disc_stem(p.stem)[1]
+        if disc is None:
+            return (0, 0, p.name.lower())
+        return (1, disc, p.name.lower())
+
+    return sorted(files, key=sort_key)[0]
 
 
 def _text(el: ET.Element | None) -> str:

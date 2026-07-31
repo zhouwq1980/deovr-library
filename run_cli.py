@@ -107,7 +107,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
         print(
             f"{r['library']}: media={r.get('total_media', r.get('total_strm', 0))} "
             f"(strm={r.get('total_strm', 0)} local={r.get('total_local', 0)}) "
-            f"+{r['added']} ~{r['updated']} skip={r['skipped']} -{r['removed']} ({r['elapsed']}s)"
+            f"+{r['added']} ~{r['updated']} skip={r['skipped']} "
+            f"stack={r.get('stacked_away', 0)} -{r['removed']} ({r['elapsed']}s)"
         )
     print("总计影片:", db.movie_count())
     return 0 if ok else 1
