@@ -21,38 +21,40 @@
     </div>
   </header>
 
-  <section class="filters">
-    <input id="q" type="search" placeholder="搜索片名 / 标题 / 演员 / 类型…" autocomplete="off" />
-    <select id="kind">
-      <option value="">全部类型</option>
-      <option value="2d">2D</option>
-      <option value="vr">VR</option>
-    </select>
-    <select id="library_id">
-      <option value="">全部目录</option>
-      {% for lib in libraries %}
-      <option value="{{ lib.id }}">{{ lib.name }}</option>
-      {% endfor %}
-    </select>
-    <select id="sort">
-      <option value="updated">最近更新</option>
-      <option value="aired">发售日</option>
-      <option value="year">年份</option>
-      <option value="rating">评分</option>
-      <option value="title">标题</option>
-      <option value="code">编号</option>
-    </select>
-    <select id="actor"><option value="">演员</option></select>
-    <select id="genre"><option value="">类型</option></select>
-    <select id="studio"><option value="">片商</option></select>
-  </section>
+  <div class="sticky-tools" id="sticky-tools">
+    <section class="filters">
+      <input id="q" type="search" placeholder="搜索片名 / 标题 / 演员 / 类型…" autocomplete="off" />
+      <select id="kind">
+        <option value="">全部类型</option>
+        <option value="2d">2D</option>
+        <option value="vr">VR</option>
+      </select>
+      <select id="library_id">
+        <option value="">全部目录</option>
+        {% for lib in libraries %}
+        <option value="{{ lib.id }}">{{ lib.name }}</option>
+        {% endfor %}
+      </select>
+      <select id="sort">
+        <option value="updated">最近更新</option>
+        <option value="aired">发售日</option>
+        <option value="year">年份</option>
+        <option value="rating">评分</option>
+        <option value="title">标题</option>
+        <option value="code">编号</option>
+      </select>
+      <select id="actor"><option value="">演员</option></select>
+      <select id="genre"><option value="">类型</option></select>
+      <select id="studio"><option value="">片商</option></select>
+    </section>
 
-  <div class="meta-bar">
-    <span id="result-info">加载中…</span>
-    <div class="pager">
-      <button class="btn ghost" id="prev">上一页</button>
-      <span id="page-label">1</span>
-      <button class="btn ghost" id="next">下一页</button>
+    <div class="meta-bar">
+      <span id="result-info">加载中…</span>
+      <div class="pager">
+        <button class="btn ghost" id="prev">上一页</button>
+        <span id="page-label">1</span>
+        <button class="btn ghost" id="next">下一页</button>
+      </div>
     </div>
   </div>
 

@@ -31,7 +31,13 @@ from tkinter import (
 )
 from typing import Any
 
-from .config import DEFAULT_CONFIG, DEFAULT_DB, DEFAULTS, THUMB_CACHE, load_config, save_config
+from .config import (
+    DEFAULT_CONFIG,
+    DEFAULT_DB,
+    load_config,
+    reset_local_data,
+    save_config,
+)
 from .db import Database
 from .scanner import scan_all
 
@@ -462,7 +468,7 @@ class LibraryGUI:
         _btn(row_lib, "添加目录", self.add_library).pack(side=LEFT, padx=(0, 4))
         _btn(row_lib, "移除", self.remove_library).pack(side=LEFT, padx=(0, 4))
         _btn(row_lib, "保存配置", self.save, accent=True).pack(side=LEFT, padx=(0, 4))
-        _btn(row_lib, "重置", self.reset_all).pack(side=LEFT)
+        _btn(row_lib, "Init Reset", self.init_reset).pack(side=LEFT)
 
         scan = _card(outer, "③ 扫描入库")
         _check(scan, "强制全量重扫", self.force_var).pack(anchor="w")
@@ -722,37 +728,59 @@ class LibraryGUI:
         save_config(self.cfg, DEFAULT_CONFIG)
         return True
 
-    def reset_all(self) -> None:
+    def init_reset(self) -> None:
+        """等同 CLI `init --reset`：清除配置 / 数据库 / 封面缓存。"""
         if not messagebox.askyesno(
-            "确认重置",
-            "将删除本机 config.json / library.db / thumbs，并写入空配置。\n确定？",
+            "Init Reset",
+            "将清空本机旧数据并重建空环境：\n"
+            "· data/config.json\n"
+            "· data/library.db（及 wal/shm）\n"
+            "· data/thumbs/*\n\n"
+            "目录里的影片文件不会删除。\n确定继续？",
         ):
             return
-        for p in (DEFAULT_CONFIG, DEFAULT_DB):
+        if self.server is not None:
             try:
-                if p.is_file():
-                    p.unlink()
+                self.server.should_exit = True
             except Exception:
                 pass
-        if THUMB_CACHE.is_dir():
-            for f in THUMB_CACHE.glob("*"):
-                try:
-                    f.unlink()
-                except Exception:
-                    pass
-        cfg = dict(DEFAULTS)
+            self.server = None
+            try:
+                self.btn_start.config(state="normal")
+                self.btn_stop.config(state="disabled")
+            except Exception:
+                pass
         ip = self._detect_ip()
-        if ip:
-            cfg["rewrite_to"] = ip
-        cfg["libraries"] = []
-        save_config(cfg, DEFAULT_CONFIG)
+        cfg, removed = reset_local_data(rewrite_to=ip or None)
         self.cfg = cfg
         self.db = Database(DEFAULT_DB)
+        self._lib_rows = []
+        self.path_mixed_var.set("")
+        self.path_2d_var.set("")
+        self.path_vr_var.set("")
+        self.force_var.set(False)
         self.rewrite_to_var.set(str(cfg.get("rewrite_to") or ""))
+        self.rewrite_enabled_var.set(bool(cfg.get("rewrite_localhost_enabled", True)))
+        self.resolve_cdn_var.set(bool(cfg.get("resolve_strm_redirects", False)))
+        self.auto_resolve_var.set(bool(cfg.get("auto_resolve_private_strm", True)))
+        self.lock_projection_var.set(bool(cfg.get("deovr_lock_projection", False)))
+        self.use_play_url_var.set(bool(cfg.get("deovr_use_play_url", True)))
+        self.proxy_strm_var.set(bool(cfg.get("proxy_strm", True)))
+        self.host_var.set(str(cfg.get("host", "0.0.0.0")))
+        self.port_var.set(str(cfg.get("port", 8765)))
         self._reload_libs()
         self._refresh_stats()
-        self.status_var.set("已重置为空配置")
-        messagebox.showinfo("完成", "已重置。请重新设置 2D/VR 目录后扫描。")
+        self.prog_lbl.config(text="进度: —")
+        self.scan_log.config(text="已 Init Reset，请设置混合目录后扫描")
+        self.status_var.set("Init Reset 完成 · 旧数据已清除")
+        detail = "\n".join(f"· {x}" for x in removed) or "· （无旧文件）"
+        messagebox.showinfo(
+            "Init Reset 完成",
+            f"已清除：\n{detail}\n\n请设置「混合」目录 → 保存 → 强制扫描。",
+        )
+
+    # 兼容旧按钮名
+    reset_all = init_reset
 
     def load_demo(self) -> None:
         from .config import APP_DIR

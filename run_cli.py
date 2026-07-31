@@ -15,6 +15,7 @@ from deovr_lib.config import (
     DEFAULTS,
     THUMB_CACHE,
     load_config,
+    reset_local_data,
     save_config,
 )
 from deovr_lib.db import Database
@@ -299,32 +300,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     reset = bool(getattr(args, "reset", False) or getattr(args, "force", False))
 
     if reset:
-        # 清空配置、数据库、封面缓存，回到全新状态
-        removed: list[str] = []
-        for p in (
-            DEFAULT_CONFIG,
-            DEFAULT_DB,
-            Path(str(DEFAULT_DB) + "-wal"),
-            Path(str(DEFAULT_DB) + "-shm"),
-        ):
-            if p.exists():
-                p.unlink()
-                removed.append(p.name)
-        if THUMB_CACHE.is_dir():
-            n = 0
-            for f in THUMB_CACHE.glob("*"):
-                if f.is_file():
-                    f.unlink()
-                    n += 1
-            removed.append(f"thumbs/* ({n} files)")
-
-        cfg = dict(DEFAULTS)
         ip = _detect_ip()
-        if ip:
-            cfg["rewrite_to"] = ip
-        cfg["libraries"] = []
-        save_config(cfg)
-        # 重建空库
+        cfg, removed = reset_local_data(rewrite_to=ip or None)
         Database(DEFAULT_DB)
         print("已重置全部本地数据")
         for x in removed:
@@ -335,9 +312,9 @@ def cmd_init(args: argparse.Namespace) -> int:
         print("libraries: 0")
         print()
         print("下一步：")
-        print('  python run_cli.py library add --path "/本机真实目录" --name AV-2D --kind 2d')
+        print('  python run_cli.py library set-mixed --path "/本机真实目录"')
         print("  python run_cli.py scan --force")
-        print("  python run_cli.py serve --rewrite --rewrite-to <局域网IP>")
+        print("  python run_cli.py serve --port 8765")
         return 0
 
     cfg = load_config()

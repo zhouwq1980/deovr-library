@@ -1,7 +1,7 @@
 (() => {
   const state = {
     page: 1,
-    pageSize: window.__PAGE_SIZE__ || 48,
+    pageSize: window.__PAGE_SIZE__ || 56,
     pages: 1,
     total: 0,
     timer: null,

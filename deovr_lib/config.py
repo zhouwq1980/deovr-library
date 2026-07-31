@@ -27,11 +27,11 @@ DEFAULTS: dict[str, Any] = {
     # /play 对 STRM 默认反向代理（带 Range），解决头显打不开仅浏览器可下的 CDN 直链
     "proxy_strm": True,
     "default_resolution": 2160,
-    "page_size": 48,
+    "page_size": 56,  # 网页默认约 8 列 × 7 行
     "deovr_section_limit": 200,
     "deovr_genre_tabs": 8,
     "deovr_actor_tabs": 0,
-    "thumb_max_width": 480,
+    "thumb_max_width": 320,
     # 自定义改地址：STRM 里的本机/局域网主机 → rewrite_to（公网不改）
     "rewrite_localhost_enabled": True,
     "rewrite_to": "192.168.0.18",
@@ -73,3 +73,32 @@ def save_config(cfg: dict[str, Any], path: Path | None = None) -> None:
     ensure_dirs()
     cfg_path = path or DEFAULT_CONFIG
     cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def reset_local_data(*, rewrite_to: str | None = None) -> tuple[dict[str, Any], list[str]]:
+    """清空 config / SQLite / thumbs，写入全新空配置。返回 (新配置, 已删项说明)。"""
+    ensure_dirs()
+    removed: list[str] = []
+    for p in (
+        DEFAULT_CONFIG,
+        DEFAULT_DB,
+        Path(str(DEFAULT_DB) + "-wal"),
+        Path(str(DEFAULT_DB) + "-shm"),
+    ):
+        if p.exists():
+            p.unlink()
+            removed.append(p.name)
+    if THUMB_CACHE.is_dir():
+        n = 0
+        for f in THUMB_CACHE.glob("*"):
+            if f.is_file():
+                f.unlink()
+                n += 1
+        removed.append(f"thumbs/* ({n} files)")
+
+    cfg = dict(DEFAULTS)
+    if rewrite_to:
+        cfg["rewrite_to"] = rewrite_to
+    cfg["libraries"] = []
+    save_config(cfg, DEFAULT_CONFIG)
+    return cfg, removed
