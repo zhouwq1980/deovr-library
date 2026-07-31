@@ -517,16 +517,18 @@ class LibraryGUI:
         ).pack(anchor="w")
         _check(
             rw,
-            "锁定 DeoVR 投影（勾选后可能无法调 2D/3D、画面大小）",
+            "锁定 DeoVR 立体格式 stereoMode（勾选后常无法调 2D/3D）",
             self.lock_projection_var,
         ).pack(anchor="w")
         Label(
             rw,
-            text="磁盘 .strm 不改；详情 /api/resolve 可核对。默认不锁定投影，可在头显内调节。",
+            text="默认只提示 screenType（2D→flat / VR→dome），stereoMode 留空以便调格式；Flat 片 Zoom 滑条常灰，请用 FOV 或手柄抓屏缩放。",
             bg=CARD,
             fg=MUTED,
             font=FONT_S,
             anchor="w",
+            wraplength=640,
+            justify=LEFT,
         ).pack(fill=X, pady=(4, 0))
 
     def _libs_from_list(self) -> list[dict[str, Any]]:

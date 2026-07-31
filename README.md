@@ -96,7 +96,7 @@ python run_cli.py serve --port 8765
 | NFO | Kodi / Emby / Jellyfin 共用 XML（直接吃现有刮削结果） |
 | 播放 | DeoVR 默认走 `/play/{id}`（可代理 STRM）；浏览器可另用 CDN 直链下载 |
 | 网页 | 演员 / 类型 / 片商 / 2D·VR 筛选 |
-| DeoVR | 默认不锁定投影（可调 2D/3D）；`/deovr` 底栏 Tab + 详情 JSON |
+| DeoVR | 默认 screenType 提示 + 空 stereoMode（可调 2D/3D）；`/deovr` 底栏 Tab + 详情 JSON |
 | 管理 | `python run_gui.py` 图形界面 |
 
 ---

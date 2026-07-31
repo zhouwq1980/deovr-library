@@ -223,6 +223,15 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         else:
             play = direct
         res = int(cfg_l.get("default_resolution") or (2160 if is_vr else 1080))
+        # 给 DeoVR 合理宽高，避免默认正方形导致画面缩放异常
+        height = res
+        width = res * 2 if is_vr else max(1, int(round(res * 16 / 9)))
+        screen_hint = (
+            cfg_l.get("vr_screen_type") if is_vr else cfg_l.get("flat_screen_type")
+        ) or ("dome" if is_vr else "flat")
+        stereo_locked = (
+            cfg_l.get("vr_stereo_mode") if is_vr else cfg_l.get("flat_stereo_mode")
+        ) or ("sbs" if is_vr else "off")
         detail: dict[str, Any] = {
             "id": mid,
             "title": movie.get("title") or movie.get("code") or f"#{mid}",
@@ -251,21 +260,24 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                     "name": "h264",
                     "videoSources": [
                         {
-                            "resolution": res,
+                            "resolution": height,
+                            "height": height,
+                            "width": width,
                             "url": play,
                         }
                     ],
                 }
             ],
         }
-        # 默认不锁定投影，头显内可调 flat/dome、SBS/TB、画面大小与位移
+        # 默认：写入 screenType 提示（正确 mesh → Zoom/位移/FOV 才可用），
+        # stereoMode 置空字符串，避免锁定 2D/3D（与 xbvr 未知投影一致）。
+        # 锁定模式：两者都写入，播放器内往往无法再改。
         if cfg_l.get("deovr_lock_projection"):
-            detail["screenType"] = (
-                cfg_l.get("vr_screen_type") if is_vr else cfg_l.get("flat_screen_type")
-            ) or ("dome" if is_vr else "flat")
-            detail["stereoMode"] = (
-                cfg_l.get("vr_stereo_mode") if is_vr else cfg_l.get("flat_stereo_mode")
-            ) or ("sbs" if is_vr else "off")
+            detail["screenType"] = screen_hint
+            detail["stereoMode"] = stereo_locked
+        else:
+            detail["screenType"] = screen_hint
+            detail["stereoMode"] = ""
         return detail
 
     def deovr_list_item(request: Request, m: dict[str, Any]) -> dict[str, Any]:
