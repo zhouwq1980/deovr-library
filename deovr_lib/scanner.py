@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable
 
@@ -11,12 +10,9 @@ from .nfo import (
     collect_media_files,
     extract_code,
     parse_nfo,
-    pick_primary_disc,
     prefer_nfo,
     prefer_poster,
     read_strm,
-    split_disc_stem,
-    strip_disc_label,
 )
 from .projection import detect_projection
 
@@ -30,22 +26,6 @@ def _mtime(path: Path | None) -> float | None:
         return path.stat().st_mtime
     except OSError:
         return None
-
-
-def _stack_groups(media_files: list[Path]) -> list[tuple[Path, list[Path]]]:
-    """按「目录 + 去分盘基名」分组，每组只入库一张主碟。"""
-    groups: dict[tuple[str, str], list[Path]] = defaultdict(list)
-    for media in media_files:
-        base, _ = split_disc_stem(media.stem)
-        key = (str(media.parent.resolve()), base.lower())
-        groups[key].append(media)
-
-    out: list[tuple[Path, list[Path]]] = []
-    for files in groups.values():
-        primary = pick_primary_disc(files)
-        out.append((primary, files))
-    out.sort(key=lambda x: str(x[0]).lower())
-    return out
 
 
 def scan_library(
@@ -67,12 +47,10 @@ def scan_library(
     if progress:
         progress(f"枚举文件: {name} …", 0, 0)
     media_files = collect_media_files(root, exts)
-    stacks = _stack_groups(media_files)
-    total = len(stacks)
+    total = len(media_files)
     if progress:
-        progress(f"开始入库 {name}（{len(media_files)} 文件 → {total} 部）", 0, max(total, 1))
+        progress(f"开始入库 {name}（共 {total}）", 0, max(total, 1))
     added = updated = skipped = 0
-    stacked_away = 0
     keep: set[str] = set()
     t0 = time.time()
     by_type = {"strm": 0, "local": 0}
@@ -85,20 +63,15 @@ def scan_library(
         ).fetchall():
             existing[r["strm_path"]] = (int(r["id"]), r["strm_mtime"], r["nfo_mtime"])
 
-    for i, (media, group) in enumerate(stacks, 1):
+    for i, media in enumerate(media_files, 1):
         if progress and (i % 5 == 0 or i == total or i == 1):
             progress(f"扫描 {name}: {media.parent.name}", i, total)
-
-        if len(group) > 1 and any(split_disc_stem(p.stem)[1] is not None for p in group):
-            stacked_away += len(group) - 1
 
         media_path = str(media.resolve())
         keep.add(media_path)
         folder = media.parent
         media_mt = _mtime(media)
-        # NFO/封面：优先主碟 stem，再回退基名 / movie.nfo
-        base_stem, _ = split_disc_stem(media.stem)
-        nfo_path = prefer_nfo(folder, media.stem) or prefer_nfo(folder, base_stem)
+        nfo_path = prefer_nfo(folder, media.stem)
         nfo_mt = _mtime(nfo_path)
 
         if not force and media_path in existing:
@@ -115,19 +88,20 @@ def scan_library(
             by_type["local"] += 1
 
         meta = parse_nfo(nfo_path) if nfo_path else None
-        raw_title = (meta.title if meta and meta.title else base_stem or media.stem)
-        title = strip_disc_label(raw_title) or raw_title
-        code = ""
-        if meta and meta.code:
-            code = strip_disc_label(meta.code)
-        if not code:
-            code = (
-                extract_code(base_stem)
-                or extract_code(media.stem)
-                or extract_code(folder.name)
-            )
-
-        poster = prefer_poster(folder, media.stem) or prefer_poster(folder, base_stem)
+        # 每个 strm/视频单独一条，不按分盘合并。
+        # 专属「同名.nfo」用 NFO 标题；共用 movie.nfo 时用文件名，避免多条同名难区分。
+        if meta and meta.title and nfo_path and nfo_path.stem.lower() == media.stem.lower():
+            title = meta.title
+        elif meta and meta.title:
+            title = media.stem
+        else:
+            title = media.stem
+        code = (
+            meta.code
+            if meta and meta.code
+            else extract_code(media.stem) or extract_code(folder.name)
+        )
+        poster = prefer_poster(folder, media.stem)
 
         actors = list(meta.actors) if meta else []
         genres = list(meta.genres) if meta else []
@@ -182,14 +156,12 @@ def scan_library(
         "library": name,
         "path": str(root),
         "kind": kind,
-        "total_media": len(media_files),
-        "total_titles": total,
+        "total_media": total,
         "total_strm": by_type["strm"],
         "total_local": by_type["local"],
         "added": added,
         "updated": updated,
         "skipped": skipped,
-        "stacked_away": stacked_away,
         "removed": removed,
         "elapsed": round(time.time() - t0, 2),
     }
@@ -221,7 +193,6 @@ def scan_all(
                     "added": 0,
                     "updated": 0,
                     "skipped": 0,
-                    "stacked_away": 0,
                     "removed": 0,
                     "elapsed": 0,
                     "error": f"目录不存在: {path}",
