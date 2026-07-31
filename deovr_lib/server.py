@@ -21,6 +21,7 @@ from .media import (
     rewrite_loopback,
 )
 from .nfo import is_http_url, media_content_type, read_strm
+from .projection import hint_from_movie
 from .thumbs import ensure_thumb, thumb_cache_token
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -209,7 +210,18 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             app.state.cfg = cfg_l
         except Exception:
             cfg_l = app.state.cfg
-        is_vr = movie.get("kind") == "vr"
+        # 投影按单片文件名/NFO 推断，不按目录 2D/VR 划分（混目录友好）
+        hint = hint_from_movie(movie)
+        is_vr = hint.kind == "vr" or hint.screen_type in (
+            "dome",
+            "sphere",
+            "fisheye",
+            "mkx200",
+            "mkx220",
+            "rf52",
+            "fisheye190",
+            "vrca220",
+        )
         runtime_min = movie.get("runtime") or 0
         video_length = int(runtime_min) * 60 if runtime_min else 0
         mid = movie["id"]
@@ -223,15 +235,21 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         else:
             play = direct
         res = int(cfg_l.get("default_resolution") or (2160 if is_vr else 1080))
-        # 给 DeoVR 合理宽高，避免默认正方形导致画面缩放异常
         height = res
         width = res * 2 if is_vr else max(1, int(round(res * 16 / 9)))
-        screen_hint = (
-            cfg_l.get("vr_screen_type") if is_vr else cfg_l.get("flat_screen_type")
-        ) or ("dome" if is_vr else "flat")
-        stereo_locked = (
-            cfg_l.get("vr_stereo_mode") if is_vr else cfg_l.get("flat_stereo_mode")
-        ) or ("sbs" if is_vr else "off")
+        screen_hint = hint.screen_type
+        stereo_hint = hint.stereo_mode
+        if cfg_l.get("deovr_lock_projection"):
+            if not screen_hint:
+                screen_hint = (
+                    (cfg_l.get("vr_screen_type") if is_vr else cfg_l.get("flat_screen_type"))
+                    or ("dome" if is_vr else "flat")
+                )
+            if not stereo_hint:
+                stereo_hint = (
+                    (cfg_l.get("vr_stereo_mode") if is_vr else cfg_l.get("flat_stereo_mode"))
+                    or ("sbs" if is_vr else "off")
+                )
         detail: dict[str, Any] = {
             "id": mid,
             "title": movie.get("title") or movie.get("code") or f"#{mid}",
@@ -269,14 +287,13 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 }
             ],
         }
-        # 默认：写入 screenType 提示（正确 mesh → Zoom/位移/FOV 才可用），
-        # stereoMode 置空字符串，避免锁定 2D/3D（与 xbvr 未知投影一致）。
-        # 锁定模式：两者都写入，播放器内往往无法再改。
+        # 有文件名线索才写 screenType；stereoMode 默认留空以便头显内改 2D/3D
+        # 锁定模式才把 stereo 一并写入
         if cfg_l.get("deovr_lock_projection"):
-            detail["screenType"] = screen_hint
-            detail["stereoMode"] = stereo_locked
+            detail["screenType"] = screen_hint or "flat"
+            detail["stereoMode"] = stereo_hint or "off"
         else:
-            detail["screenType"] = screen_hint
+            detail["screenType"] = screen_hint or ""
             detail["stereoMode"] = ""
         return detail
 

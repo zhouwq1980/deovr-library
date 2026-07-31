@@ -15,6 +15,7 @@ from .nfo import (
     prefer_poster,
     read_strm,
 )
+from .projection import detect_projection
 
 ProgressCb = Callable[[str, int, int], None]
 
@@ -106,6 +107,20 @@ def scan_library(
                 if 1 < len(tail) <= 20 and not extract_code(tail):
                     actors = [tail]
 
+        # 单片 kind/投影按文件名·NFO 识别；目录 kind=mixed/2d/vr 仅作片库标签，不强制每部片
+        hint = detect_projection(
+            path=media_path,
+            title=title,
+            code=code or "",
+            folder=folder.name,
+            genres=genres,
+        )
+        movie_kind = hint.kind
+        lib_kind = (kind or "mixed").lower()
+        if lib_kind in ("2d", "vr") and hint.confidence == "none":
+            # 纯 2D/VR 分目录且文件名无线索时，才回退到目录标签
+            movie_kind = lib_kind
+
         is_new = media_path not in existing
         db.upsert_movie(
             library_id=lib_id,
@@ -117,7 +132,7 @@ def scan_library(
             aired=meta.aired if meta else "",
             rating=meta.rating if meta else None,
             runtime=meta.runtime if meta else None,
-            kind=kind,
+            kind=movie_kind,
             strm_path=media_path,
             strm_url=url,
             poster_path=str(poster) if poster else None,
@@ -166,7 +181,7 @@ def scan_all(
         # 跳过示例占位路径 / 不存在目录，避免整次扫描中断
         if path.startswith("/path/to/") or not Path(path).is_dir():
             print(f"\n跳过「{name}」: 目录不存在 → {path}")
-            print("  请先: python run_cli.py library add --path 真实目录 --name 名称 --kind 2d|vr")
+            print("  请先: python run_cli.py library set-mixed --path 真实目录")
             results.append(
                 {
                     "library": name,

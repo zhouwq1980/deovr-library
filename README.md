@@ -32,7 +32,7 @@ source .venv/bin/activate
 python run_gui.py
 ```
 
-在 GUI 里：选 2D/VR 目录 → 扫描 → 填改写 IP → 启动服务 → 打开网页 / 复制 DeoVR 地址。
+在 GUI 里：选媒体目录（可混放 2D/VR）→ 强制扫描 → 填改写 IP → 启动服务 → 打开网页 / 复制 DeoVR 地址。
 
 > 一键安装**不再**在脚本里配目录或启动服务；这些都在 GUI（或 CLI）完成。
 
@@ -58,17 +58,14 @@ source .venv/bin/activate
 python run_gui.py
 ```
 
-### 命令行增删改 2D / VR
+### 命令行（混目录推荐）
 
 ```bash
 cd ~/deovr-library && source .venv/bin/activate
 
 python run_cli.py library list
-python run_cli.py library set-2d --path "/Users/你/AV-2D"
-python run_cli.py library set-vr --path "/Users/你/AV-VR"
+python run_cli.py library set-mixed --path "/Users/你/媒体库"
 python run_cli.py library remove 名称或完整路径
-python run_cli.py library clear-2d
-python run_cli.py library clear-vr
 python run_cli.py scan --force
 python run_cli.py serve --port 8765
 ```
@@ -96,7 +93,7 @@ python run_cli.py serve --port 8765
 | NFO | Kodi / Emby / Jellyfin 共用 XML（直接吃现有刮削结果） |
 | 播放 | DeoVR 默认走 `/play/{id}`（可代理 STRM）；浏览器可另用 CDN 直链下载 |
 | 网页 | 演员 / 类型 / 片商 / 2D·VR 筛选 |
-| DeoVR | 默认 screenType 提示 + 空 stereoMode（可调 2D/3D）；`/deovr` 底栏 Tab + 详情 JSON |
+| DeoVR | 投影按文件名/NFO 识别（混目录 OK）+ 空 stereoMode；`/deovr` 底栏 Tab + 详情 JSON |
 | 管理 | `python run_gui.py` 图形界面 |
 
 ---
@@ -108,7 +105,7 @@ python run_gui.py                       # 图形管理器
 python run_cli.py init --reset          # 清空配置/库/封面，重来
 python run_cli.py demo                  # 用 testdata 示例片库
 python run_cli.py library list
-python run_cli.py library set-2d --path DIR
+python run_cli.py library set-mixed --path DIR
 python run_cli.py library set-vr --path DIR
 python run_cli.py library remove 名称或路径
 python run_cli.py config --rewrite --rewrite-to 192.168.0.18

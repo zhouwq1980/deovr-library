@@ -50,7 +50,7 @@ FONT = ("PingFang SC", 11)
 FONT_B = ("PingFang SC", 12, "bold")
 FONT_S = ("PingFang SC", 10)
 FONT_TITLE = ("PingFang SC", 15, "bold")
-FIXED_NAMES = {"2d": "2D", "vr": "VR"}
+FIXED_NAMES = {"mixed": "混合", "2d": "2D", "vr": "VR"}
 
 _STYLE_READY = False
 
@@ -279,6 +279,7 @@ class LibraryGUI:
         )
         self.use_play_url_var = BooleanVar(value=bool(self.cfg.get("deovr_use_play_url", True)))
         self.proxy_strm_var = BooleanVar(value=bool(self.cfg.get("proxy_strm", True)))
+        self.path_mixed_var = StringVar(value="")
         self.path_2d_var = StringVar(value="")
         self.path_vr_var = StringVar(value="")
 
@@ -401,7 +402,14 @@ class LibraryGUI:
             anchor="w",
         ).pack(fill=X, pady=(1, 8))
 
-        fixed = _card(outer, "① 固定 2D / VR 目录")
+        fixed = _card(outer, "① 媒体目录（2D/VR 可混放）")
+        row_mix = Frame(fixed, bg=CARD)
+        row_mix.pack(fill=X, pady=(0, 4))
+        Label(row_mix, text="混合", bg=CARD, fg=FG, font=FONT_B, width=3).pack(side=LEFT)
+        _entry(row_mix, self.path_mixed_var, 36).pack(side=LEFT, padx=4, fill=X, expand=True)
+        _btn(row_mix, "选择…", lambda: self._pick_fixed("mixed")).pack(side=LEFT, padx=(0, 4))
+        _btn(row_mix, "清除", lambda: self._clear_fixed("mixed")).pack(side=LEFT)
+
         row2d = Frame(fixed, bg=CARD)
         row2d.pack(fill=X, pady=(0, 4))
         Label(row2d, text="2D", bg=CARD, fg=FG, font=FONT_B, width=3).pack(side=LEFT)
@@ -418,11 +426,13 @@ class LibraryGUI:
 
         Label(
             fixed,
-            text="再设即覆盖；改完请「保存配置」再扫描。",
+            text="推荐用「混合」；单片 2D/VR 按文件名(_180/_SBS/VR…)与 NFO 标签识别。可选分目录仅作筛选。改完请保存再强制扫描。",
             bg=CARD,
             fg=MUTED,
             font=FONT_S,
             anchor="w",
+            wraplength=640,
+            justify=LEFT,
         ).pack(fill=X)
 
         lib = _card(outer, "② 全部媒体目录")
@@ -522,7 +532,7 @@ class LibraryGUI:
         ).pack(anchor="w")
         Label(
             rw,
-            text="默认只提示 screenType（2D→flat / VR→dome），stereoMode 留空以便调格式；Flat 片 Zoom 滑条常灰，请用 FOV 或手柄抓屏缩放。",
+            text="投影按文件名/NFO 提示 screenType，不按目录分 2D/VR；stereoMode 默认留空。Flat 片 Zoom 常灰，请用 FOV 或 Grip 抓屏。",
             bg=CARD,
             fg=MUTED,
             font=FONT_S,
@@ -536,6 +546,7 @@ class LibraryGUI:
 
     def _sync_fixed_vars(self) -> None:
         by_kind = {(r.get("kind") or "").lower(): r for r in self._lib_rows}
+        self.path_mixed_var.set((by_kind.get("mixed") or {}).get("path") or "")
         self.path_2d_var.set((by_kind.get("2d") or {}).get("path") or "")
         self.path_vr_var.set((by_kind.get("vr") or {}).get("path") or "")
 
@@ -548,7 +559,7 @@ class LibraryGUI:
             if (r.get("kind") or "").lower() != kind and r.get("name") != name
         ]
         self._lib_rows.append({"name": name, "kind": kind, "path": path})
-        order = {"2d": 0, "vr": 1}
+        order = {"mixed": 0, "2d": 1, "vr": 2}
         self._lib_rows.sort(key=lambda x: order.get((x.get("kind") or "").lower(), 9))
         self._reload_listbox_only()
         self._sync_fixed_vars()
@@ -618,7 +629,14 @@ class LibraryGUI:
         win.geometry("520x200")
         win.configure(bg=CARD)
         name_var = StringVar(value=Path(path).name)
-        kind_var = StringVar(value="vr" if "VR" in Path(path).name.upper() else "2d")
+        upper = Path(path).name.upper()
+        if "VR" in upper:
+            default_kind = "vr"
+        elif "2D" in upper or "FLAT" in upper:
+            default_kind = "2d"
+        else:
+            default_kind = "mixed"
+        kind_var = StringVar(value=default_kind)
         Label(win, text=path, bg=CARD, fg=FG, wraplength=480, font=FONT_S, anchor="w").pack(
             fill=X, padx=12, pady=10
         )
@@ -626,13 +644,13 @@ class LibraryGUI:
         row.pack(fill=X, padx=12)
         Label(row, text="名称", bg=CARD, font=FONT).pack(side=LEFT)
         _entry(row, name_var, 18).pack(side=LEFT, padx=6)
-        Label(row, text="类型(2d/vr)", bg=CARD, font=FONT).pack(side=LEFT)
-        _entry(row, kind_var, 6).pack(side=LEFT, padx=6)
+        Label(row, text="类型(mixed/2d/vr)", bg=CARD, font=FONT).pack(side=LEFT)
+        _entry(row, kind_var, 8).pack(side=LEFT, padx=6)
 
         def ok() -> None:
             kind = kind_var.get().strip().lower()
-            if kind not in ("2d", "vr"):
-                kind = "2d"
+            if kind not in ("mixed", "2d", "vr"):
+                kind = "mixed"
             name = name_var.get().strip() or Path(path).name
             self._lib_rows = [r for r in self._lib_rows if r.get("name") != name]
             self._lib_rows.append({"name": name, "kind": kind, "path": path})
@@ -654,30 +672,24 @@ class LibraryGUI:
 
     def _apply_form_to_cfg(self) -> bool:
         # 固定槽位以输入框为准：有路径则覆盖，空则清除该 kind
-        p2 = self.path_2d_var.get().strip()
-        pv = self.path_vr_var.get().strip()
-        if p2:
-            if not Path(p2).expanduser().is_dir():
-                messagebox.showerror("错误", f"2D 目录不存在:\n{p2}")
-                return False
-            self._set_fixed_in_rows("2d", str(Path(p2).expanduser().resolve()))
-        else:
-            self._lib_rows = [
-                r
-                for r in self._lib_rows
-                if (r.get("kind") or "").lower() != "2d" and r.get("name") != "2D"
-            ]
-        if pv:
-            if not Path(pv).expanduser().is_dir():
-                messagebox.showerror("错误", f"VR 目录不存在:\n{pv}")
-                return False
-            self._set_fixed_in_rows("vr", str(Path(pv).expanduser().resolve()))
-        else:
-            self._lib_rows = [
-                r
-                for r in self._lib_rows
-                if (r.get("kind") or "").lower() != "vr" and r.get("name") != "VR"
-            ]
+        for kind, var, label in (
+            ("mixed", self.path_mixed_var, "混合"),
+            ("2d", self.path_2d_var, "2D"),
+            ("vr", self.path_vr_var, "VR"),
+        ):
+            p = var.get().strip()
+            if p:
+                if not Path(p).expanduser().is_dir():
+                    messagebox.showerror("错误", f"{label} 目录不存在:\n{p}")
+                    return False
+                self._set_fixed_in_rows(kind, str(Path(p).expanduser().resolve()))
+            else:
+                name = FIXED_NAMES[kind]
+                self._lib_rows = [
+                    r
+                    for r in self._lib_rows
+                    if (r.get("kind") or "").lower() != kind and r.get("name") != name
+                ]
         self._reload_listbox_only()
         self._sync_fixed_vars()
 

@@ -18,10 +18,9 @@ DEFAULTS: dict[str, Any] = {
     "vr_stereo_mode": "sbs",
     "flat_screen_type": "flat",
     "flat_stereo_mode": "off",
-    # DeoVR 投影：
-    # false（默认）= 只按 kind 写入 screenType 提示（flat/dome），stereoMode 置空
-    #   → 可调 2D/3D；mesh 正确时 Zoom/位移/FOV 才可用
-    # true = 同时锁定 screenType + stereoMode（播放器内常无法改格式与大小）
+    # DeoVR 投影（按单片文件名/NFO 推断，不按目录 2D/VR）：
+    # false（默认）= 有线索才写 screenType，stereoMode 置空（可调 2D/3D）
+    # true = 写入 screenType + stereoMode（播放器内常无法再改）
     "deovr_lock_projection": False,
     # DeoVR encodings 优先用本服务 /play/{id}（每次现解析），避免过期 CDN 直链
     "deovr_use_play_url": True,
