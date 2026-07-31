@@ -274,6 +274,11 @@ class LibraryGUI:
         self.auto_resolve_var = BooleanVar(
             value=bool(self.cfg.get("auto_resolve_private_strm", True))
         )
+        self.lock_projection_var = BooleanVar(
+            value=bool(self.cfg.get("deovr_lock_projection", False))
+        )
+        self.use_play_url_var = BooleanVar(value=bool(self.cfg.get("deovr_use_play_url", True)))
+        self.proxy_strm_var = BooleanVar(value=bool(self.cfg.get("proxy_strm", True)))
         self.path_2d_var = StringVar(value="")
         self.path_vr_var = StringVar(value="")
 
@@ -500,9 +505,24 @@ class LibraryGUI:
             self.auto_resolve_var,
         ).pack(anchor="w")
         _check(rw, "始终解析跳转", self.resolve_cdn_var).pack(anchor="w")
+        _check(
+            rw,
+            "DeoVR 经本服务 /play 播放（推荐，避免过期直链）",
+            self.use_play_url_var,
+        ).pack(anchor="w")
+        _check(
+            rw,
+            "代理 STRM 流到头显（推荐；直链仅浏览器能下时）",
+            self.proxy_strm_var,
+        ).pack(anchor="w")
+        _check(
+            rw,
+            "锁定 DeoVR 投影（勾选后可能无法调 2D/3D、画面大小）",
+            self.lock_projection_var,
+        ).pack(anchor="w")
         Label(
             rw,
-            text="磁盘 .strm 不改；详情 /api/resolve 可核对。",
+            text="磁盘 .strm 不改；详情 /api/resolve 可核对。默认不锁定投影，可在头显内调节。",
             bg=CARD,
             fg=MUTED,
             font=FONT_S,
@@ -670,6 +690,9 @@ class LibraryGUI:
         self.cfg["rewrite_to"] = self.rewrite_to_var.get().strip()
         self.cfg["resolve_strm_redirects"] = bool(self.resolve_cdn_var.get())
         self.cfg["auto_resolve_private_strm"] = bool(self.auto_resolve_var.get())
+        self.cfg["deovr_use_play_url"] = bool(self.use_play_url_var.get())
+        self.cfg["proxy_strm"] = bool(self.proxy_strm_var.get())
+        self.cfg["deovr_lock_projection"] = bool(self.lock_projection_var.get())
         return True
 
     def save(self) -> None:

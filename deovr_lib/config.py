@@ -18,6 +18,13 @@ DEFAULTS: dict[str, Any] = {
     "vr_stereo_mode": "sbs",
     "flat_screen_type": "flat",
     "flat_stereo_mode": "off",
+    # DeoVR：默认不写入 screenType/stereoMode，方便头显内自由调 2D/3D、画面大小与位移
+    # 设为 true 时按 kind 锁定为下方 vr_/flat_ 配置（可能无法在播放器里改）
+    "deovr_lock_projection": False,
+    # DeoVR encodings 优先用本服务 /play/{id}（每次现解析），避免过期 CDN 直链
+    "deovr_use_play_url": True,
+    # /play 对 STRM 默认反向代理（带 Range），解决头显打不开仅浏览器可下的 CDN 直链
+    "proxy_strm": True,
     "default_resolution": 2160,
     "page_size": 48,
     "deovr_section_limit": 200,

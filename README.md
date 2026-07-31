@@ -94,9 +94,9 @@ python run_cli.py serve --port 8765
 | 定位 | Emby/Jellyfin 已有库 → 一键变成 DeoVR 可用的媒体库页 |
 | 媒体 | `.strm`（HTTP 地址）+ `mp4/mkv/avi/mov/ts/m2ts/webm…` 本地文件 |
 | NFO | Kodi / Emby / Jellyfin 共用 XML（直接吃现有刮削结果） |
-| 播放 | STRM → 改写/解析后的直链；本地 → `/play/{id}` Range |
+| 播放 | DeoVR 默认走 `/play/{id}`（可代理 STRM）；浏览器可另用 CDN 直链下载 |
 | 网页 | 演员 / 类型 / 片商 / 2D·VR 筛选 |
-| DeoVR | `/deovr` 底栏 Tab 列表 + `/deovr/{id}` 详情（播放器规范 JSON） |
+| DeoVR | 默认不锁定投影（可调 2D/3D）；`/deovr` 底栏 Tab + 详情 JSON |
 | 管理 | `python run_gui.py` 图形界面 |
 
 ---

@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import json as _json
@@ -214,20 +214,22 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         video_length = int(runtime_min) * 60 if runtime_min else 0
         mid = movie["id"]
         bu = base_url(request)
-        screen = cfg_l["vr_screen_type"] if is_vr else cfg_l["flat_screen_type"]
-        stereo = cfg_l["vr_stereo_mode"] if is_vr else cfg_l["flat_stereo_mode"]
-        thumb = f"{bu}/cover/{mid}.jpg"
-        # STRM：JSON 里直接给改写后的直链（避免头显不跟 /play 的 302，或仍看到 127.0.0.1）
-        # 本地文件：仍走本服务 /play
-        play = media_url_for_client(request, movie) or f"{bu}/play/{mid}"
-        return {
+        thumb = f"{bu}/cover/{mid}.jpg?v={thumb_cache_token(movie.get('poster_path'), mid)}"
+        play_proxy = f"{bu}/play/{mid}"
+        direct = media_url_for_client(request, movie) or play_proxy
+        # DeoVR 对过期/防盗链 CDN 直链常失败；默认给本服务 /play（可代理或现解析后跳转）
+        if cfg_l.get("deovr_use_play_url", True):
+            play = play_proxy
+        else:
+            play = direct
+        res = int(cfg_l.get("default_resolution") or (2160 if is_vr else 1080))
+        detail: dict[str, Any] = {
             "id": mid,
             "title": movie.get("title") or movie.get("code") or f"#{mid}",
             "authorized": 1,
             "description": movie.get("plot") or "",
+            # 官方文档：is3d 需为 true；具体 2D/3D 由 stereoMode/screenType 或播放器内调节决定
             "is3d": True,
-            "screenType": screen,
-            "stereoMode": stereo,
             "skipIntro": 0,
             "videoLength": video_length,
             "thumbnailUrl": thumb,
@@ -249,13 +251,22 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                     "name": "h264",
                     "videoSources": [
                         {
-                            "resolution": int(cfg_l.get("default_resolution") or 2160),
+                            "resolution": res,
                             "url": play,
                         }
                     ],
                 }
             ],
         }
+        # 默认不锁定投影，头显内可调 flat/dome、SBS/TB、画面大小与位移
+        if cfg_l.get("deovr_lock_projection"):
+            detail["screenType"] = (
+                cfg_l.get("vr_screen_type") if is_vr else cfg_l.get("flat_screen_type")
+            ) or ("dome" if is_vr else "flat")
+            detail["stereoMode"] = (
+                cfg_l.get("vr_stereo_mode") if is_vr else cfg_l.get("flat_stereo_mode")
+            ) or ("sbs" if is_vr else "off")
+        return detail
 
     def deovr_list_item(request: Request, m: dict[str, Any]) -> dict[str, Any]:
         bu = base_url(request)
@@ -611,11 +622,89 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             app.state.cfg = cfg_l
         except Exception:
             cfg_l = app.state.cfg
-        # 与 DeoVR JSON 同一套改写/解析逻辑
         url = media_url_for_client(request, movie)
         if not url or not is_http_url(url):
             raise HTTPException(404, "无有效播放地址（STRM 为空或本地文件缺失）")
-        return RedirectResponse(url=url, status_code=302)
+
+        # 默认代理：头显常打不开浏览器能下的 CDN 直链（UA/防盗链/过期签名）
+        force_redirect = (request.query_params.get("redirect") or "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if force_redirect or not cfg_l.get("proxy_strm", True):
+            return RedirectResponse(url=url, status_code=302)
+
+        try:
+            import httpx
+        except ImportError:
+            return RedirectResponse(url=url, status_code=302)
+
+        upstream_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "*/*",
+        }
+        range_h = request.headers.get("range") or request.headers.get("Range")
+        if range_h:
+            upstream_headers["Range"] = range_h
+
+        client = httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(60.0, connect=15.0))
+        try:
+            upstream = await client.send(
+                client.build_request(
+                    request.method if request.method in ("GET", "HEAD") else "GET",
+                    url,
+                    headers=upstream_headers,
+                ),
+                stream=True,
+            )
+        except Exception as e:
+            await client.aclose()
+            raise HTTPException(502, f"上游媒体不可用: {e}") from e
+
+        if upstream.status_code >= 400:
+            body = await upstream.aread()
+            await upstream.aclose()
+            await client.aclose()
+            raise HTTPException(upstream.status_code, body.decode("utf-8", errors="ignore")[:200])
+
+        out_headers: dict[str, str] = {
+            "Access-Control-Allow-Origin": "*",
+            "Accept-Ranges": "bytes",
+        }
+        ctype = upstream.headers.get("content-type") or "application/octet-stream"
+        out_headers["Content-Type"] = ctype
+        for src, dest in (
+            ("content-length", "Content-Length"),
+            ("content-range", "Content-Range"),
+            ("accept-ranges", "Accept-Ranges"),
+        ):
+            val = upstream.headers.get(src)
+            if val:
+                out_headers[dest] = val
+
+        if request.method == "HEAD":
+            await upstream.aclose()
+            await client.aclose()
+            return Response(status_code=upstream.status_code, headers=out_headers)
+
+        async def body_iter():
+            try:
+                async for chunk in upstream.aiter_bytes(chunk_size=64 * 1024):
+                    yield chunk
+            finally:
+                await upstream.aclose()
+                await client.aclose()
+
+        return StreamingResponse(
+            body_iter(),
+            status_code=upstream.status_code,
+            headers=out_headers,
+            media_type=out_headers.get("Content-Type"),
+        )
 
     @app.get("/api/resolve/{movie_id}")
     async def api_resolve(request: Request, movie_id: int):
