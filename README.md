@@ -92,7 +92,7 @@ python run_cli.py serve --port 8765
 | 媒体 | `.strm`（HTTP 地址）+ `mp4/mkv/avi/mov/ts/m2ts/webm…` 本地文件 |
 | NFO | Kodi / Emby / Jellyfin 共用 XML（直接吃现有刮削结果） |
 | 播放 | DeoVR 默认走 `/play/{id}`（可代理 STRM）；浏览器可另用 CDN 直链下载 |
-| 网页 | 演员 / 类型 / 片商 / 2D·VR 筛选 |
+| 网页 | 演员 / 类型 / 片商 / 2D·VR 筛选；详情页可唤起 VLC / IINA（`/settings`） |
 | DeoVR | 投影按文件名/NFO 识别（混目录 OK）+ 空 stereoMode；`/deovr` 底栏 Tab + 详情 JSON |
 | 管理 | `python run_gui.py` 图形界面 |
 

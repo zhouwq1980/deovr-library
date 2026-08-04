@@ -16,6 +16,7 @@
       <a class="btn" href="deovr://{{ base }}/deovr/{{ movie.id }}">用 DeoVR 打开</a>
       <a class="btn ghost" href="{{ play_url }}" target="_blank" rel="noopener">CDN 直链（浏览器下载）</a>
       <a class="btn ghost" href="/play/{{ movie.id }}" target="_blank" rel="noopener">经本服务播放/代理</a>
+      <a class="btn ghost" href="/settings">播放器设置</a>
     </div>
   </header>
 
@@ -55,6 +56,26 @@
       </dl>
       {% if movie.plot %}
       <p class="plot">{{ movie.plot }}</p>
+      {% endif %}
+
+      {% if external_players %}
+      <div class="ext-players">
+        <h3>外接播放器</h3>
+        <div class="player-btns">
+          {% for p in external_players %}
+            {% if p.scheme_href %}
+            <a class="btn" href="{{ p.scheme_href }}">{{ p.name }}</a>
+            {% endif %}
+            {% if p.has_path %}
+            <a class="btn ghost" href="/api/launch-player/{{ movie.id }}/{{ p.id }}" title="在运行本服务的电脑上启动">{{ p.name }} · 本机</a>
+            {% endif %}
+          {% endfor %}
+        </div>
+        <p class="hint">彩色按钮走协议唤起（浏览器所在电脑）；「本机」在服务器上按 path 启动。<a href="/settings">设置路径 / scheme</a></p>
+        <p class="url-box"><code>{{ ext_play_url }}</code></p>
+      </div>
+      {% else %}
+      <p class="hint">未启用外接播放器 · <a href="/settings">去设置 VLC / IINA</a></p>
       {% endif %}
 
       <div class="play-urls">

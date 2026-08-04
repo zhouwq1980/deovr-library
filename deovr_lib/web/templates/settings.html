@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>外接播放器设置</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <a class="back" href="/browse">← 返回片库</a>
+      <h1>外接播放器</h1>
+      <p class="sub">配置 VLC / IINA 等；详情页一点即可唤起播放</p>
+    </div>
+    <div class="actions">
+      <a class="btn ghost" href="/browse">片库</a>
+      <button class="btn" id="btn-save" type="button">保存</button>
+    </div>
+  </header>
+
+  {% if saved %}
+  <p class="banner-ok">已保存</p>
+  {% endif %}
+
+  <section class="settings-panel">
+    <p class="hint">
+      <strong>scheme</strong>：浏览器本机唤起（如 <code>vlc://{url}</code>、<code>iina://weblink?url={url_encoded}</code>）。<br />
+      <strong>path</strong>：运行本服务的电脑上的应用路径；详情里「本机启动」会在服务器上打开。<br />
+      播放地址统一用 <code>{{ base }}/play/&#123;id&#125;</code>。
+    </p>
+
+    <div id="players" class="player-settings">
+      {% for p in players %}
+      <div class="player-row" data-id="{{ p.id }}">
+        <label class="player-en">
+          <input type="checkbox" class="p-enabled" {% if p.enabled %}checked{% endif %} />
+          <span class="p-name">{{ p.name }}</span>
+          <code class="muted">{{ p.id }}</code>
+        </label>
+        <label>显示名
+          <input class="p-label" type="text" value="{{ p.name }}" />
+        </label>
+        <label>scheme
+          <input class="p-scheme" type="text" value="{{ p.scheme }}" placeholder="vlc://{url}" />
+        </label>
+        <label>path（本机应用）
+          <input class="p-path" type="text" value="{{ p.path }}" placeholder="/Applications/IINA.app" />
+        </label>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="settings-actions">
+      <button class="btn" id="btn-save-2" type="button">保存设置</button>
+      <span id="save-msg" class="hint"></span>
+    </div>
+  </section>
+
+  <script>
+    function collect() {
+      return [...document.querySelectorAll(".player-row")].map((row) => ({
+        id: row.dataset.id,
+        enabled: row.querySelector(".p-enabled").checked,
+        name: (row.querySelector(".p-label").value || row.dataset.id).trim(),
+        scheme: row.querySelector(".p-scheme").value.trim(),
+        path: row.querySelector(".p-path").value.trim(),
+      }));
+    }
+    async function save() {
+      const msg = document.getElementById("save-msg");
+      msg.textContent = "保存中…";
+      try {
+        const res = await fetch("/api/settings/players", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ players: collect() }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "保存失败");
+        msg.textContent = "已保存";
+        history.replaceState(null, "", "/settings?saved=1");
+      } catch (e) {
+        msg.textContent = String(e.message || e);
+      }
+    }
+    document.getElementById("btn-save").addEventListener("click", save);
+    document.getElementById("btn-save-2").addEventListener("click", save);
+  </script>
+</body>
+</html>

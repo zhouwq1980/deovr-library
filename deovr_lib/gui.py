@@ -38,6 +38,7 @@ from .config import (
     reset_local_data,
     save_config,
 )
+from .players import merge_external_players
 from .db import Database
 from .scanner import scan_all
 
@@ -239,7 +240,7 @@ class LibraryGUI:
     def __init__(self) -> None:
         self.root = Tk()
         self.root.title("DeoVR Library 管理器")
-        self.root.geometry("720x560")
+        self.root.geometry("720x640")
         self.root.minsize(640, 480)
         self.root.configure(bg=BG)
         _ensure_styles(self.root)
@@ -547,6 +548,48 @@ class LibraryGUI:
             justify=LEFT,
         ).pack(fill=X, pady=(4, 0))
 
+        players_card = _card(outer, "⑤ 外接播放器（网页详情唤起 VLC / IINA）")
+        Label(
+            players_card,
+            text="勾选启用并填写本机 .app / 可执行文件路径；也可在网页 /settings 修改 scheme。",
+            bg=CARD,
+            fg=MUTED,
+            font=FONT_S,
+            anchor="w",
+            wraplength=640,
+            justify=LEFT,
+        ).pack(fill=X, pady=(0, 6))
+        self._player_vars: list[dict[str, Any]] = []
+        for p in merge_external_players(self.cfg.get("external_players")):
+            row = Frame(players_card, bg=CARD)
+            row.pack(fill=X, pady=2)
+            en = BooleanVar(value=bool(p.get("enabled")))
+            path_v = StringVar(value=str(p.get("path") or ""))
+            scheme_v = StringVar(value=str(p.get("scheme") or ""))
+            _check(row, str(p.get("name") or p["id"]), en).pack(side=LEFT)
+            _entry(row, path_v, 28).pack(side=LEFT, padx=4, fill=X, expand=True)
+
+            def _pick(var: StringVar = path_v, title: str = str(p.get("name") or "")) -> None:
+                path = filedialog.askdirectory(title=f"选择 {title}（如 xxx.app）")
+                if not path:
+                    path = filedialog.askopenfilename(
+                        title=f"选择 {title} 可执行文件",
+                        filetypes=[("所有文件", "*.*")],
+                    )
+                if path:
+                    var.set(path)
+
+            _btn(row, "…", _pick).pack(side=LEFT)
+            self._player_vars.append(
+                {
+                    "id": p["id"],
+                    "name": p.get("name") or p["id"],
+                    "enabled": en,
+                    "path": path_v,
+                    "scheme": scheme_v,
+                }
+            )
+
     def _libs_from_list(self) -> list[dict[str, Any]]:
         return [{"name": r["name"], "kind": r["kind"], "path": r["path"]} for r in self._lib_rows]
 
@@ -713,6 +756,17 @@ class LibraryGUI:
         self.cfg["deovr_use_play_url"] = bool(self.use_play_url_var.get())
         self.cfg["proxy_strm"] = bool(self.proxy_strm_var.get())
         self.cfg["deovr_lock_projection"] = bool(self.lock_projection_var.get())
+        if getattr(self, "_player_vars", None):
+            self.cfg["external_players"] = [
+                {
+                    "id": pv["id"],
+                    "name": pv["name"],
+                    "enabled": bool(pv["enabled"].get()),
+                    "path": pv["path"].get().strip(),
+                    "scheme": pv["scheme"].get().strip(),
+                }
+                for pv in self._player_vars
+            ]
         return True
 
     def save(self) -> None:

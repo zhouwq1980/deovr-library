@@ -12,7 +12,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 import json as _json
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .config import load_config
+from .config import DEFAULT_CONFIG, load_config, save_config
 from .db import Database
 from .media import (
     is_private_or_loopback_host,
@@ -21,6 +21,12 @@ from .media import (
     rewrite_loopback,
 )
 from .nfo import is_http_url, media_content_type, read_strm
+from .players import (
+    launch_local_player,
+    merge_external_players,
+    players_for_movie,
+    scheme_href,
+)
 from .projection import hint_from_movie
 from .thumbs import ensure_thumb, thumb_cache_token
 
@@ -519,10 +525,17 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         movie = database.get_movie(movie_id)
         if not movie:
             raise HTTPException(404, "未找到影片")
+        try:
+            cfg_l = load_config()
+            app.state.cfg = cfg_l
+        except Exception:
+            cfg_l = app.state.cfg
         movie = dict(movie)
         movie["cover_token"] = thumb_cache_token(movie.get("poster_path"), movie_id)
         raw = strm_raw_url(movie)
         play = media_url_for_client(request, movie) or f"{base_url(request)}/play/{movie_id}"
+        # 外接播放器用本服务 /play（局域网可达、可代理）
+        ext_url = f"{base_url(request)}/play/{movie_id}"
         return _render(
             "detail.html",
             movie=movie,
@@ -530,7 +543,91 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             play_url=play,
             raw_url=raw,
             play_changed=bool(raw and play and raw != play),
+            external_players=players_for_movie(cfg_l, ext_url),
+            ext_play_url=ext_url,
         )
+
+    @app.get("/settings", response_class=HTMLResponse)
+    async def settings_page(request: Request):
+        try:
+            cfg_l = load_config()
+            app.state.cfg = cfg_l
+        except Exception:
+            cfg_l = app.state.cfg
+        return _render(
+            "settings.html",
+            base=base_url(request),
+            players=merge_external_players(cfg_l.get("external_players")),
+            saved=request.query_params.get("saved") == "1",
+        )
+
+    @app.post("/api/settings/players")
+    async def api_save_players(request: Request):
+        """保存外接播放器：JSON { players: [...] }。"""
+        try:
+            body = await request.json()
+        except Exception as e:
+            raise HTTPException(400, f"无效 JSON: {e}") from e
+        players = merge_external_players(body.get("players") if isinstance(body, dict) else body)
+        try:
+            cfg_l = load_config()
+        except Exception:
+            cfg_l = dict(app.state.cfg)
+        cfg_l["external_players"] = players
+        save_config(cfg_l, DEFAULT_CONFIG)
+        app.state.cfg = cfg_l
+        return {"ok": True, "players": players}
+
+    @app.get("/api/launch-player/{movie_id}/{player_id}")
+    async def api_launch_player(request: Request, movie_id: int, player_id: str):
+        """在运行本服务的电脑上用 path 启动播放器。"""
+        movie = database.get_movie(movie_id)
+        if not movie:
+            raise HTTPException(404, "未找到影片")
+        try:
+            cfg_l = load_config()
+            app.state.cfg = cfg_l
+        except Exception:
+            cfg_l = app.state.cfg
+        players = {p["id"]: p for p in merge_external_players(cfg_l.get("external_players"))}
+        player = players.get(player_id)
+        if not player or not player.get("enabled"):
+            raise HTTPException(404, "播放器未启用或不存在")
+        media_url = f"{base_url(request)}/play/{movie_id}"
+        try:
+            msg = launch_local_player(player, media_url)
+        except Exception as e:
+            raise HTTPException(400, str(e)) from e
+        # 浏览器点链接时给简单提示页
+        accept = (request.headers.get("accept") or "").lower()
+        if "text/html" in accept:
+            return HTMLResponse(
+                f"<html><body style='font-family:sans-serif;padding:2rem'>"
+                f"<p>{msg}</p><p><code>{media_url}</code></p>"
+                f"<p><a href='/m/{movie_id}'>返回详情</a></p></body></html>"
+            )
+        return {"ok": True, "message": msg, "url": media_url}
+
+    @app.get("/open-player/{movie_id}/{player_id}")
+    async def open_player_scheme(request: Request, movie_id: int, player_id: str):
+        """302 跳到播放器 URL scheme（在浏览器用的电脑上唤起）。"""
+        movie = database.get_movie(movie_id)
+        if not movie:
+            raise HTTPException(404, "未找到影片")
+        try:
+            cfg_l = load_config()
+            app.state.cfg = cfg_l
+        except Exception:
+            cfg_l = app.state.cfg
+        players = {p["id"]: p for p in merge_external_players(cfg_l.get("external_players"))}
+        player = players.get(player_id)
+        if not player or not player.get("enabled"):
+            raise HTTPException(404, "播放器未启用或不存在")
+        media_url = f"{base_url(request)}/play/{movie_id}"
+        href = scheme_href(player, media_url)
+        if not href:
+            raise HTTPException(400, "该播放器未配置 scheme，请用「本机启动」或到 /settings 填写")
+        return RedirectResponse(url=href, status_code=302)
 
     @app.get("/api/movies")
     async def api_movies(

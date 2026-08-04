@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .players import DEFAULT_EXTERNAL_PLAYERS, merge_external_players
+
 APP_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = APP_DIR / "data"
 DEFAULT_DB = DATA_DIR / "library.db"
@@ -42,6 +44,8 @@ DEFAULTS: dict[str, Any] = {
     # 默认：STRM 指向 127.0.0.1/私网网关时自动跟随到 CDN 直链（头显才能播）
     "auto_resolve_private_strm": True,
     "media_url_cache_ttl": 300,
+    # 外接播放器（网页详情可点；scheme=浏览器唤起，path=服务端本机启动）
+    "external_players": [dict(p) for p in DEFAULT_EXTERNAL_PLAYERS],
     # 本地视频扩展名（另始终支持 .strm）
     "video_extensions": [
         ".mp4", ".mkv", ".avi", ".m4v", ".mov", ".wmv",
@@ -66,6 +70,7 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
                 cfg.update(saved)
         except Exception:
             pass
+    cfg["external_players"] = merge_external_players(cfg.get("external_players"))
     return cfg
 
 

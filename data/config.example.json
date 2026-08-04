@@ -19,6 +19,43 @@
   "resolve_strm_redirects": false,
   "auto_resolve_private_strm": true,
   "media_url_cache_ttl": 300,
+  "external_players": [
+    {
+      "id": "vlc",
+      "name": "VLC",
+      "enabled": true,
+      "scheme": "vlc://{url}",
+      "path": "/Applications/VLC.app"
+    },
+    {
+      "id": "iina",
+      "name": "IINA",
+      "enabled": true,
+      "scheme": "iina://weblink?url={url_encoded}",
+      "path": "/Applications/IINA.app"
+    },
+    {
+      "id": "mpv",
+      "name": "mpv",
+      "enabled": false,
+      "scheme": "",
+      "path": "/opt/homebrew/bin/mpv"
+    },
+    {
+      "id": "potplayer",
+      "name": "PotPlayer",
+      "enabled": false,
+      "scheme": "potplayer://{url}",
+      "path": ""
+    },
+    {
+      "id": "infuse",
+      "name": "Infuse",
+      "enabled": false,
+      "scheme": "infuse://x-callback-url/play?url={url_encoded}",
+      "path": ""
+    }
+  ],
   "video_extensions": [
     ".mp4", ".mkv", ".avi", ".m4v", ".mov", ".wmv",
     ".ts", ".m2ts", ".webm", ".flv", ".mpg", ".mpeg"
