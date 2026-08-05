@@ -394,21 +394,39 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         # 底栏 Tab 总数宜少，过多会异常
         genre_tabs = int(cfg_l.get("deovr_genre_tabs") or 8)
         actor_tabs = int(cfg_l.get("deovr_actor_tabs") or 0)
+        hide = bool(cfg_l.get("hide_strm_without_nfo_poster"))
 
         if genre:
-            items = database.search_movies(genre=genre, page=1, page_size=limit)["items"]
+            items = database.search_movies(
+                genre=genre,
+                page=1,
+                page_size=limit,
+                hide_strm_without_nfo_poster=hide,
+            )["items"]
             return deovr_scene_from_movies(request, genre, items)
 
         if actor:
-            items = database.search_movies(actor=actor, page=1, page_size=limit)["items"]
+            items = database.search_movies(
+                actor=actor,
+                page=1,
+                page_size=limit,
+                hide_strm_without_nfo_poster=hide,
+            )["items"]
             return deovr_scene_from_movies(request, actor, items)
 
         if studio:
-            items = database.search_movies(studio=studio, page=1, page_size=limit)["items"]
+            items = database.search_movies(
+                studio=studio,
+                page=1,
+                page_size=limit,
+                hide_strm_without_nfo_poster=hide,
+            )["items"]
             return deovr_scene_from_movies(request, studio, items)
 
         if kind:
-            items = database.list_for_deovr(kind=kind, limit=limit)
+            items = database.list_for_deovr(
+                kind=kind, limit=limit, hide_strm_without_nfo_poster=hide
+            )
             label = {"2d": "2D", "vr": "VR"}.get(kind, kind.upper())
             return deovr_scene_from_movies(request, label, items)
 
@@ -417,18 +435,26 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 (x["name"] for x in database.list_libraries() if x["id"] == library_id),
                 f"Lib {library_id}",
             )
-            items = database.list_for_deovr(library_id=library_id, limit=limit)
+            items = database.list_for_deovr(
+                library_id=library_id, limit=limit, hide_strm_without_nfo_poster=hide
+            )
             return deovr_scene_from_movies(request, lib_name, items)
 
         scenes: list[dict[str, Any]] = []
 
-        recent = database.list_for_deovr(limit=min(100, limit))
+        recent = database.list_for_deovr(
+            limit=min(100, limit), hide_strm_without_nfo_poster=hide
+        )
         scenes.append(
             {"name": "Recent", "list": [deovr_list_item(request, m) for m in recent]}
         )
 
         for lib in database.list_libraries():
-            items = database.list_for_deovr(library_id=lib["id"], limit=min(120, limit))
+            items = database.list_for_deovr(
+                library_id=lib["id"],
+                limit=min(120, limit),
+                hide_strm_without_nfo_poster=hide,
+            )
             if items:
                 scenes.append(
                     {
@@ -438,7 +464,9 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 )
 
         for k, label in (("2d", "2D"), ("vr", "VR")):
-            items = database.list_for_deovr(kind=k, limit=min(100, limit))
+            items = database.list_for_deovr(
+                kind=k, limit=min(100, limit), hide_strm_without_nfo_poster=hide
+            )
             if items:
                 scenes.append(
                     {"name": label, "list": [deovr_list_item(request, m) for m in items]}
@@ -448,7 +476,10 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         for g in database.facet_genres(genre_tabs):
             gname = g["name"]
             items = database.search_movies(
-                genre=gname, page=1, page_size=min(80, limit)
+                genre=gname,
+                page=1,
+                page_size=min(80, limit),
+                hide_strm_without_nfo_poster=hide,
             )["items"]
             if items:
                 # Tab 名尽量短；完整名在列表里用片标题体现
@@ -461,7 +492,10 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             for a in database.facet_actors(actor_tabs):
                 aname = a["name"]
                 items = database.search_movies(
-                    actor=aname, page=1, page_size=min(60, limit)
+                    actor=aname,
+                    page=1,
+                    page_size=min(60, limit),
+                    hide_strm_without_nfo_poster=hide,
                 )["items"]
                 if items:
                     tab = aname if len(aname) <= 12 else (aname[:11] + "…")
@@ -642,6 +676,11 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         page: int = Query(1, ge=1),
         page_size: int = Query(48, ge=1, le=200),
     ):
+        try:
+            cfg_l = load_config()
+            app.state.cfg = cfg_l
+        except Exception:
+            cfg_l = app.state.cfg
         data = database.search_movies(
             q=q,
             actor=actor,
@@ -653,6 +692,9 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             sort=sort,
             page=page,
             page_size=page_size,
+            hide_strm_without_nfo_poster=bool(
+                cfg_l.get("hide_strm_without_nfo_poster")
+            ),
         )
         for item in data.get("items") or []:
             item["cover_token"] = thumb_cache_token(item.get("poster_path"), int(item["id"]))

@@ -46,6 +46,8 @@ DEFAULTS: dict[str, Any] = {
     "media_url_cache_ttl": 300,
     # 外接播放器（网页详情可点；scheme=浏览器唤起，path=服务端本机启动）
     "external_players": [dict(p) for p in DEFAULT_EXTERNAL_PLAYERS],
+    # 隐藏无封面且无 NFO 的 .strm（本地视频不受影响；网页 / DeoVR 列表均生效）
+    "hide_strm_without_nfo_poster": False,
     # 本地视频扩展名（另始终支持 .strm）
     "video_extensions": [
         ".mp4", ".mkv", ".avi", ".m4v", ".mov", ".wmv",

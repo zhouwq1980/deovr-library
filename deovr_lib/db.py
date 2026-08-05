@@ -413,6 +413,7 @@ class Database:
         sort: str = "updated",
         page: int = 1,
         page_size: int = 48,
+        hide_strm_without_nfo_poster: bool = False,
     ) -> dict[str, Any]:
         where: list[str] = ["1=1"]
         params: list[Any] = []
@@ -460,6 +461,17 @@ class Database:
         if year:
             where.append("m.year=?")
             params.append(year)
+        if hide_strm_without_nfo_poster:
+            # .strm 须同时有封面与 NFO；非 strm（本地视频）始终显示
+            where.append(
+                """(
+                    LOWER(IFNULL(m.strm_path,'')) NOT LIKE '%.strm'
+                    OR (
+                        IFNULL(m.poster_path,'') != ''
+                        AND IFNULL(m.nfo_path,'') != ''
+                    )
+                )"""
+            )
 
         order = {
             "title": "m.title COLLATE NOCASE ASC",
@@ -567,7 +579,12 @@ class Database:
             return [dict(r) for r in rows]
 
     def list_for_deovr(
-        self, *, kind: str | None = None, library_id: int | None = None, limit: int = 500
+        self,
+        *,
+        kind: str | None = None,
+        library_id: int | None = None,
+        limit: int = 500,
+        hide_strm_without_nfo_poster: bool = False,
     ) -> list[dict[str, Any]]:
         where = ["1=1"]
         params: list[Any] = []
@@ -577,6 +594,16 @@ class Database:
         if library_id:
             where.append("library_id=?")
             params.append(library_id)
+        if hide_strm_without_nfo_poster:
+            where.append(
+                """(
+                    LOWER(IFNULL(strm_path,'')) NOT LIKE '%.strm'
+                    OR (
+                        IFNULL(poster_path,'') != ''
+                        AND IFNULL(nfo_path,'') != ''
+                    )
+                )"""
+            )
         params.append(limit)
         with self.session() as conn:
             rows = conn.execute(

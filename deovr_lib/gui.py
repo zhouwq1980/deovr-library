@@ -286,6 +286,9 @@ class LibraryGUI:
         )
         self.use_play_url_var = BooleanVar(value=bool(self.cfg.get("deovr_use_play_url", True)))
         self.proxy_strm_var = BooleanVar(value=bool(self.cfg.get("proxy_strm", True)))
+        self.hide_bare_strm_var = BooleanVar(
+            value=bool(self.cfg.get("hide_strm_without_nfo_poster", False))
+        )
         self.path_mixed_var = StringVar(value="")
         self.path_2d_var = StringVar(value="")
         self.path_vr_var = StringVar(value="")
@@ -537,6 +540,11 @@ class LibraryGUI:
             "锁定 DeoVR 立体格式 stereoMode（勾选后常无法调 2D/3D）",
             self.lock_projection_var,
         ).pack(anchor="w")
+        _check(
+            rw,
+            "隐藏无封面且无 NFO 的 .strm（网页 / DeoVR 不显示）",
+            self.hide_bare_strm_var,
+        ).pack(anchor="w")
         Label(
             rw,
             text="投影按文件名/NFO 提示 screenType，不按目录分 2D/VR；stereoMode 默认留空。Flat 片 Zoom 常灰，请用 FOV 或 Grip 抓屏。",
@@ -756,6 +764,7 @@ class LibraryGUI:
         self.cfg["deovr_use_play_url"] = bool(self.use_play_url_var.get())
         self.cfg["proxy_strm"] = bool(self.proxy_strm_var.get())
         self.cfg["deovr_lock_projection"] = bool(self.lock_projection_var.get())
+        self.cfg["hide_strm_without_nfo_poster"] = bool(self.hide_bare_strm_var.get())
         if getattr(self, "_player_vars", None):
             self.cfg["external_players"] = [
                 {
@@ -820,6 +829,7 @@ class LibraryGUI:
         self.lock_projection_var.set(bool(cfg.get("deovr_lock_projection", False)))
         self.use_play_url_var.set(bool(cfg.get("deovr_use_play_url", True)))
         self.proxy_strm_var.set(bool(cfg.get("proxy_strm", True)))
+        self.hide_bare_strm_var.set(bool(cfg.get("hide_strm_without_nfo_poster", False)))
         self.host_var.set(str(cfg.get("host", "0.0.0.0")))
         self.port_var.set(str(cfg.get("port", 8765)))
         self._reload_libs()

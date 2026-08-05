@@ -9,6 +9,7 @@
   "deovr_lock_projection": false,
   "deovr_use_play_url": true,
   "proxy_strm": true,
+  "hide_strm_without_nfo_poster": false,
   "default_resolution": 2160,
   "page_size": 56,
   "deovr_section_limit": 200,
