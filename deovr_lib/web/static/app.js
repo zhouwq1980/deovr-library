@@ -45,6 +45,8 @@
     genre: pendingFilter("genre"),
     studio: pendingFilter("studio"),
   };
+  // pending 只在首次加载 facets 时用于回填；之后以控件当前值为准，避免改其它筛选时被旧 actor 拉回
+  let pendingApplied = false;
   if (params.get("page")) state.page = Math.max(1, parseInt(params.get("page"), 10) || 1);
   if (el.q && pending.q) el.q.value = pending.q;
   if (el.kind && pending.kind) el.kind.value = pending.kind;
@@ -95,9 +97,13 @@
   async function loadFacets() {
     const res = await fetch(`/api/facets?${facetQuery().toString()}`);
     const data = await res.json();
-    fillSelect(el.actor, data.actors, "演员", el.actor.value || pending.actor);
-    fillSelect(el.genre, data.genres, "类型", el.genre.value || pending.genre);
-    fillSelect(el.studio, data.studios, "片商", el.studio.value || pending.studio);
+    const preferActor = pendingApplied ? el.actor.value : (el.actor.value || pending.actor);
+    const preferGenre = pendingApplied ? el.genre.value : (el.genre.value || pending.genre);
+    const preferStudio = pendingApplied ? el.studio.value : (el.studio.value || pending.studio);
+    fillSelect(el.actor, data.actors, "演员", preferActor);
+    fillSelect(el.genre, data.genres, "类型", preferGenre);
+    fillSelect(el.studio, data.studios, "片商", preferStudio);
+    pendingApplied = true;
     if (el.movies && data.stats) el.movies.textContent = data.stats.movies;
   }
 
