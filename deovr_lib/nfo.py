@@ -47,12 +47,56 @@ _CODE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 多分盘/分集后缀：-CD1 / _cd2 / -E01 / -EP02 / -part3（1–3 位数字）
+_DISC_SUFFIX_RE = re.compile(
+    r"(?i)[._\-\s]+(?:cd|disc|disk|dvd|part|pt|e|ep|episode)[._\-\s]*0*(\d{1,3})$"
+)
+
 
 def extract_code(text: str) -> str:
     if not text:
         return ""
     m = _CODE_RE.search(text.upper().replace("_", "-"))
     return m.group(1).upper() if m else ""
+
+
+def split_disc_stem(stem: str) -> tuple[str, int | None]:
+    """返回 (去掉 CD/E/PART 后缀的基名, 盘号或 None)。"""
+    s = (stem or "").strip()
+    if not s:
+        return "", None
+    m = _DISC_SUFFIX_RE.search(s)
+    if not m:
+        return s, None
+    base = s[: m.start()].rstrip("._- ")
+    if not base:
+        return s, None
+    try:
+        return base, int(m.group(1))
+    except ValueError:
+        return base, None
+
+
+def disc_part_label(stem: str) -> str:
+    """从文件名提取展示用盘号，如 E01 / CD2。"""
+    s = (stem or "").strip()
+    m = _DISC_SUFFIX_RE.search(s)
+    if not m:
+        return ""
+    raw = s[m.start() :].strip("._- ")
+    return raw.upper().replace("_", "-") if raw else ""
+
+
+def sidecar_stem_candidates(media_stem: str) -> list[str]:
+    """同名优先，其次分盘基名（KAVR-174-E02 → KAVR-174）。"""
+    out: list[str] = []
+    stem = (media_stem or "").strip()
+    if stem:
+        out.append(stem)
+    base, disc = split_disc_stem(stem)
+    if disc is not None and base and base.lower() not in {x.lower() for x in out}:
+        out.append(base)
+    return out
 
 
 def _text(el: ET.Element | None) -> str:
@@ -229,15 +273,13 @@ def parse_nfo(path: Path) -> NfoMeta:
     return meta
 
 
-def prefer_nfo(folder: Path, media_stem: str) -> Path | None:
-    """仅同名 sidecar：{stem}.nfo。不借用 movie.nfo / 目录名.nfo / 其它影片 NFO。"""
-    if not media_stem:
+def _nfo_for_stem(folder: Path, stem: str) -> Path | None:
+    if not stem:
         return None
-    c = folder / f"{media_stem}.nfo"
+    c = folder / f"{stem}.nfo"
     if c.is_file():
         return c
-    # 大小写不敏感（部分盘符/同步盘）
-    target = f"{media_stem}.nfo".lower()
+    target = f"{stem}.nfo".lower()
     try:
         for p in folder.iterdir():
             if p.is_file() and p.name.lower() == target:
@@ -247,28 +289,22 @@ def prefer_nfo(folder: Path, media_stem: str) -> Path | None:
     return None
 
 
-def prefer_poster(folder: Path, media_stem: str) -> Path | None:
-    """仅同名 sidecar 封面，不借用 poster.jpg / folder.jpg / 其它影片图片。
-
-    允许：
-      {stem}-poster.* / {stem}.* / {stem}-thumb.* / {stem}-cover.*
-    """
-    if not media_stem:
+def _poster_for_stem(folder: Path, stem: str) -> Path | None:
+    if not stem:
         return None
-    stem_l = media_stem.lower()
+    stem_l = stem.lower()
     allowed_stems = {
         stem_l,
         f"{stem_l}-poster",
         f"{stem_l}-thumb",
         f"{stem_l}-cover",
     }
-    # 优先常见 Emby/Jellyfin 命名
     for suffix in (".jpg", ".jpeg", ".png", ".webp"):
         for name in (
-            f"{media_stem}-poster{suffix}",
-            f"{media_stem}{suffix}",
-            f"{media_stem}-thumb{suffix}",
-            f"{media_stem}-cover{suffix}",
+            f"{stem}-poster{suffix}",
+            f"{stem}{suffix}",
+            f"{stem}-thumb{suffix}",
+            f"{stem}-cover{suffix}",
         ):
             c = folder / name
             if c.is_file():
@@ -285,7 +321,7 @@ def prefer_poster(folder: Path, media_stem: str) -> Path | None:
         return None
     if not hits:
         return None
-    # poster > 同名图 > thumb > cover
+
     def rank(p: Path) -> tuple[int, str]:
         s = p.stem.lower()
         if s == f"{stem_l}-poster":
@@ -298,6 +334,85 @@ def prefer_poster(folder: Path, media_stem: str) -> Path | None:
 
     hits.sort(key=rank)
     return hits[0]
+
+
+_MEDIA_SUFFIXES = frozenset(
+    {".strm"}
+    | {
+        (e.lower() if e.startswith(".") else f".{e.lower()}")
+        for e in DEFAULT_VIDEO_EXTS
+    }
+)
+
+
+def _same_base_sibling_stems(folder: Path, media_stem: str) -> list[str]:
+    """同目录下同分盘基名的其它媒体 stem（如 E01 供 E02 继承封面）。"""
+    base, disc = split_disc_stem(media_stem)
+    if disc is None or not base:
+        return []
+    base_l = base.lower()
+    media_l = media_stem.lower()
+    found: list[str] = []
+    try:
+        for p in folder.iterdir():
+            if not p.is_file() or p.suffix.lower() not in _MEDIA_SUFFIXES:
+                continue
+            if p.stem.lower() == media_l:
+                continue
+            b, d = split_disc_stem(p.stem)
+            if d is not None and b.lower() == base_l:
+                found.append(p.stem)
+    except OSError:
+        return []
+
+    def sort_key(s: str) -> tuple[int, str]:
+        _, n = split_disc_stem(s)
+        return (n if n is not None else 999, s.lower())
+
+    found.sort(key=sort_key)
+    return found
+
+
+def prefer_nfo(folder: Path, media_stem: str) -> Path | None:
+    """同名 .nfo → 分盘基名 .nfo → 同基名兄弟分集 .nfo。
+
+    不借用无关的 movie.nfo / 其它番号的 NFO。
+    """
+    if not media_stem:
+        return None
+    for stem in sidecar_stem_candidates(media_stem):
+        hit = _nfo_for_stem(folder, stem)
+        if hit:
+            return hit
+    for stem in _same_base_sibling_stems(folder, media_stem):
+        hit = _nfo_for_stem(folder, stem)
+        if hit:
+            return hit
+    return None
+
+
+def prefer_poster(folder: Path, media_stem: str) -> Path | None:
+    """同名封面 → 分盘基名封面 → 同基名兄弟分集封面。
+
+    分盘作品最后才回退目录 poster.jpg（仅当文件名带 CD/E 后缀时）。
+    """
+    if not media_stem:
+        return None
+    for stem in sidecar_stem_candidates(media_stem):
+        hit = _poster_for_stem(folder, stem)
+        if hit:
+            return hit
+    for stem in _same_base_sibling_stems(folder, media_stem):
+        hit = _poster_for_stem(folder, stem)
+        if hit:
+            return hit
+    _, disc = split_disc_stem(media_stem)
+    if disc is not None:
+        for name in ("poster.jpg", "poster.jpeg", "poster.png", "cover.jpg", "folder.jpg"):
+            c = folder / name
+            if c.is_file():
+                return c
+    return None
 
 
 def has_sidecar_meta(folder: Path, media_stem: str) -> tuple[bool, bool]:

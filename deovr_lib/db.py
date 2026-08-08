@@ -525,13 +525,12 @@ class Database:
             where.append("m.year=?")
             params.append(year)
         if hide_strm_without_nfo_poster:
+            # 与文案一致：仅隐藏「无封面且无 NFO」；有其一即显示（分集常只有 E01 有图）
             where.append(
                 """(
                     LOWER(IFNULL(m.strm_path,'')) NOT LIKE '%.strm'
-                    OR (
-                        IFNULL(m.poster_path,'') != ''
-                        AND IFNULL(m.nfo_path,'') != ''
-                    )
+                    OR IFNULL(m.poster_path,'') != ''
+                    OR IFNULL(m.nfo_path,'') != ''
                 )"""
             )
         return joins, where, params
@@ -771,10 +770,8 @@ class Database:
             where.append(
                 """(
                     LOWER(IFNULL(strm_path,'')) NOT LIKE '%.strm'
-                    OR (
-                        IFNULL(poster_path,'') != ''
-                        AND IFNULL(nfo_path,'') != ''
-                    )
+                    OR IFNULL(poster_path,'') != ''
+                    OR IFNULL(nfo_path,'') != ''
                 )"""
             )
         params.append(limit)

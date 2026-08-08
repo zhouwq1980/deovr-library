@@ -9,6 +9,7 @@ from .db import Database
 from .nfo import (
     DEFAULT_VIDEO_EXTS,
     collect_media_files,
+    disc_part_label,
     extract_code,
     parse_nfo,
     prefer_nfo,
@@ -167,11 +168,19 @@ def scan_library(
             url = ""
             by_type["local"] += 1
 
-        # 仅使用同名 sidecar；无同名 NFO/图则留空，绝不借用文件夹内其它影片资料
+        # sidecar：同名 → 分盘基名 → 同基名兄弟分集（不借用无关 movie.nfo）
         meta = parse_nfo(nfo_path) if nfo_path else None
-        title = (meta.title if meta and meta.title else "") or media.stem
-        code = (meta.code if meta and meta.code else "") or extract_code(media.stem)
         poster = prefer_poster(folder, media.stem)
+        code = (meta.code if meta and meta.code else "") or extract_code(media.stem)
+
+        # 分盘标题常相同：追加 E01/CD2，避免网页上看起来像只有一部
+        part = disc_part_label(media.stem)
+        if meta and meta.title:
+            title = meta.title
+            if part and part.lower() not in title.lower():
+                title = f"{title} · {part}"
+        else:
+            title = media.stem
 
         actors = list(meta.actors) if meta else []
         genres = list(meta.genres) if meta else []
