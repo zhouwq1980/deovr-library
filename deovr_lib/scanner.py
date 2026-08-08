@@ -15,6 +15,87 @@ from .nfo import (
     prefer_poster,
     read_strm,
 )
+
+
+def collect_bare_strm(
+    libraries: list[dict[str, Any]],
+    *,
+    video_exts: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """收集无同名 NFO 且无同名封面的 .strm（按磁盘 sidecar 严格判断）。"""
+    exts = tuple(video_exts) if video_exts else DEFAULT_VIDEO_EXTS
+    out: list[dict[str, Any]] = []
+    for lib in libraries:
+        root_s = (lib.get("path") or "").strip()
+        if not root_s:
+            continue
+        root = Path(root_s).expanduser()
+        if not root.is_dir():
+            continue
+        lib_name = lib.get("name") or root.name
+        for media in collect_media_files(root, exts):
+            if media.suffix.lower() != ".strm":
+                continue
+            folder = media.parent
+            has_nfo = prefer_nfo(folder, media.stem) is not None
+            has_poster = prefer_poster(folder, media.stem) is not None
+            if has_nfo or has_poster:
+                continue
+            try:
+                rel = str(media.resolve().relative_to(root.resolve()))
+            except ValueError:
+                rel = media.name
+            out.append(
+                {
+                    "library": lib_name,
+                    "root": str(root.resolve()),
+                    "rel": rel.replace("\\", "/"),
+                    "path": str(media.resolve()),
+                    "name": media.name,
+                }
+            )
+    out.sort(key=lambda x: (x["library"], x["rel"].lower()))
+    return out
+
+
+def format_bare_strm_tree(items: list[dict[str, Any]]) -> str:
+    """把裸 strm 列表格式化为可读的文件名树。"""
+    lines: list[str] = [
+        "# 无同名 NFO 且无同名封面的 .strm",
+        "# 匹配规则：仅 {stem}.nfo / {stem}-poster.* / {stem}.* 等 sidecar",
+        f"# 共 {len(items)} 个",
+        "",
+    ]
+    if not items:
+        lines.append("(无)")
+        lines.append("")
+        return "\n".join(lines)
+
+    current_lib: str | None = None
+    seen_dirs: set[str] = set()
+    for it in items:
+        lib = it["library"]
+        if lib != current_lib:
+            if current_lib is not None:
+                lines.append("")
+            current_lib = lib
+            seen_dirs = set()
+            lines.append(f"[{lib}]")
+            lines.append(f"  root: {it['root']}")
+        parts = [p for p in it["rel"].split("/") if p]
+        if not parts:
+            continue
+        for i in range(len(parts) - 1):
+            dkey = "/".join(parts[: i + 1])
+            if dkey in seen_dirs:
+                continue
+            seen_dirs.add(dkey)
+            lines.append("  " * (i + 1) + f"{parts[i]}/")
+        depth = max(0, len(parts) - 1)
+        lines.append("  " * (depth + 1) + parts[-1])
+    lines.append("")
+    return "\n".join(lines)
+
 ProgressCb = Callable[[str, int, int], None]
 
 
@@ -86,30 +167,14 @@ def scan_library(
             url = ""
             by_type["local"] += 1
 
+        # 仅使用同名 sidecar；无同名 NFO/图则留空，绝不借用文件夹内其它影片资料
         meta = parse_nfo(nfo_path) if nfo_path else None
-        # 每个 strm/视频单独一条，不按分盘合并。
-        # 专属「同名.nfo」用 NFO 标题；共用 movie.nfo 时用文件名，避免多条同名难区分。
-        if meta and meta.title and nfo_path and nfo_path.stem.lower() == media.stem.lower():
-            title = meta.title
-        elif meta and meta.title:
-            title = media.stem
-        else:
-            title = media.stem
-        code = (
-            meta.code
-            if meta and meta.code
-            else extract_code(media.stem) or extract_code(folder.name)
-        )
+        title = (meta.title if meta and meta.title else "") or media.stem
+        code = (meta.code if meta and meta.code else "") or extract_code(media.stem)
         poster = prefer_poster(folder, media.stem)
 
         actors = list(meta.actors) if meta else []
         genres = list(meta.genres) if meta else []
-        if not actors and title:
-            parts = title.replace("】", " ").split()
-            if parts:
-                tail = parts[-1].strip("[]【】")
-                if 1 < len(tail) <= 20 and not extract_code(tail):
-                    actors = [tail]
 
         # 2D/VR、日本/欧美一律由 NFO/番号识别，不再回退到目录 kind
         movie_kind = detect_kind(genres=genres, title=title, path=media_path)

@@ -40,7 +40,7 @@ from .config import (
 )
 from .players import merge_external_players
 from .db import Database
-from .scanner import scan_all
+from .scanner import collect_bare_strm, format_bare_strm_tree, scan_all
 
 # 强制浅色高对比。按钮必须用 ttk+clam：macOS Aqua 会忽略 Button 的 bg，却保留白字 → 看不见
 BG = "#e8ecf1"
@@ -476,12 +476,25 @@ class LibraryGUI:
 
         scan = _card(outer, "③ 扫描入库")
         _check(scan, "强制全量重扫", self.force_var).pack(anchor="w")
+        Label(
+            scan,
+            text="NFO/封面仅认同名 sidecar（如 a.strm ↔ a.nfo / a-poster.jpg），不借用文件夹内其它资料。",
+            bg=CARD,
+            fg=MUTED,
+            font=FONT_S,
+            anchor="w",
+            wraplength=640,
+            justify=LEFT,
+        ).pack(fill=X, pady=(0, 4))
         row_scan = Frame(scan, bg=CARD)
         row_scan.pack(fill=X, pady=4)
         _btn(row_scan, "扫描", self.start_scan, accent=True).pack(
             side=LEFT, padx=(0, 4)
         )
         _btn(row_scan, "刷新统计", self._refresh_stats).pack(side=LEFT, padx=(0, 4))
+        _btn(row_scan, "导出裸STRM树", self.export_bare_strm_tree).pack(
+            side=LEFT, padx=(0, 4)
+        )
         _btn(row_scan, "Demo", self.load_demo).pack(side=LEFT)
         self.prog_lbl = Label(scan, text="进度: —", bg=CARD, fg=MUTED, font=FONT_S, anchor="w")
         self.prog_lbl.pack(fill=X)
@@ -862,6 +875,50 @@ class LibraryGUI:
         if self.save_silent():
             self.status_var.set("已加载 testdata，开始扫描…")
             self.start_scan()
+
+    def export_bare_strm_tree(self) -> None:
+        """导出无同名 NFO 且无同名封面的 .strm 文件名树。"""
+        libs = [
+            x
+            for x in self._libs_from_list()
+            if x.get("path") and not str(x["path"]).startswith("/path/to/")
+        ]
+        if not libs:
+            messagebox.showwarning("提示", "请先设置混合/媒体目录")
+            return
+        self.status_var.set("正在扫描裸 STRM…")
+        self.root.update_idletasks()
+        try:
+            items = collect_bare_strm(
+                libs, video_exts=list(self.cfg.get("video_extensions") or []) or None
+            )
+            text = format_bare_strm_tree(items)
+        except Exception:
+            messagebox.showerror("导出失败", traceback.format_exc())
+            return
+        if not items:
+            messagebox.showinfo("导出裸STRM树", "未找到无同名 NFO 且无同名封面的 .strm")
+            self.status_var.set("无裸 STRM")
+            return
+        path = filedialog.asksaveasfilename(
+            title="导出裸 STRM 文件名树",
+            defaultextension=".txt",
+            initialfile="bare-strm-tree.txt",
+            filetypes=[("文本", "*.txt"), ("全部", "*.*")],
+        )
+        if not path:
+            self.status_var.set("已取消导出")
+            return
+        try:
+            Path(path).write_text(text, encoding="utf-8")
+        except Exception as e:
+            messagebox.showerror("导出失败", str(e))
+            return
+        self.status_var.set(f"已导出 {len(items)} 个裸 STRM → {path}")
+        messagebox.showinfo(
+            "导出完成",
+            f"共 {len(items)} 个无同名 NFO/封面的 .strm\n已保存：\n{path}",
+        )
 
     def start_scan(self) -> None:
         if self.scanning:

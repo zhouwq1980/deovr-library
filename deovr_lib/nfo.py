@@ -230,54 +230,82 @@ def parse_nfo(path: Path) -> NfoMeta:
 
 
 def prefer_nfo(folder: Path, media_stem: str) -> Path | None:
-    """same-stem > movie.nfo > folder.nfo > 任意 episode nfo（跳过 tvshow.nfo）。"""
-    candidates = [
-        folder / f"{media_stem}.nfo",
-        folder / "movie.nfo",
-        folder / f"{folder.name}.nfo",
-    ]
-    for c in candidates:
-        if c.is_file():
-            return c
-    nfos = sorted(
-        p
-        for p in folder.glob("*.nfo")
-        if p.name.lower() not in ("tvshow.nfo", "season.nfo", "series.nfo")
-    )
-    return nfos[0] if nfos else None
+    """仅同名 sidecar：{stem}.nfo。不借用 movie.nfo / 目录名.nfo / 其它影片 NFO。"""
+    if not media_stem:
+        return None
+    c = folder / f"{media_stem}.nfo"
+    if c.is_file():
+        return c
+    # 大小写不敏感（部分盘符/同步盘）
+    target = f"{media_stem}.nfo".lower()
+    try:
+        for p in folder.iterdir():
+            if p.is_file() and p.name.lower() == target:
+                return p
+    except OSError:
+        pass
+    return None
 
 
 def prefer_poster(folder: Path, media_stem: str) -> Path | None:
-    names = [
-        f"{media_stem}-poster.jpg",
-        f"{media_stem}-poster.jpeg",
-        f"{media_stem}-poster.png",
-        f"{media_stem}.jpg",
-        f"{media_stem}.jpeg",
-        f"{media_stem}.png",
-        "poster.jpg",
-        "poster.jpeg",
-        "poster.png",
-        "folder.jpg",
-        "cover.jpg",
-        f"{folder.name}-poster.jpg",
-        f"{folder.name}.jpg",
-        "fanart.jpg",
-        f"{media_stem}-fanart.jpg",
-        "backdrop.jpg",
-        "thumb.jpg",
-    ]
-    for name in names:
-        c = folder / name
-        if c.is_file():
-            return c
-    for p in sorted(folder.glob("*-poster.*")):
-        if p.suffix.lower() in IMAGE_EXTS:
-            return p
-    for p in sorted(folder.iterdir()):
-        if p.is_file() and p.suffix.lower() in IMAGE_EXTS:
-            return p
-    return None
+    """仅同名 sidecar 封面，不借用 poster.jpg / folder.jpg / 其它影片图片。
+
+    允许：
+      {stem}-poster.* / {stem}.* / {stem}-thumb.* / {stem}-cover.*
+    """
+    if not media_stem:
+        return None
+    stem_l = media_stem.lower()
+    allowed_stems = {
+        stem_l,
+        f"{stem_l}-poster",
+        f"{stem_l}-thumb",
+        f"{stem_l}-cover",
+    }
+    # 优先常见 Emby/Jellyfin 命名
+    for suffix in (".jpg", ".jpeg", ".png", ".webp"):
+        for name in (
+            f"{media_stem}-poster{suffix}",
+            f"{media_stem}{suffix}",
+            f"{media_stem}-thumb{suffix}",
+            f"{media_stem}-cover{suffix}",
+        ):
+            c = folder / name
+            if c.is_file():
+                return c
+    try:
+        hits = [
+            p
+            for p in folder.iterdir()
+            if p.is_file()
+            and p.suffix.lower() in IMAGE_EXTS
+            and p.stem.lower() in allowed_stems
+        ]
+    except OSError:
+        return None
+    if not hits:
+        return None
+    # poster > 同名图 > thumb > cover
+    def rank(p: Path) -> tuple[int, str]:
+        s = p.stem.lower()
+        if s == f"{stem_l}-poster":
+            return (0, p.name.lower())
+        if s == stem_l:
+            return (1, p.name.lower())
+        if s == f"{stem_l}-thumb":
+            return (2, p.name.lower())
+        return (3, p.name.lower())
+
+    hits.sort(key=rank)
+    return hits[0]
+
+
+def has_sidecar_meta(folder: Path, media_stem: str) -> tuple[bool, bool]:
+    """返回 (有同名 nfo, 有同名封面)。"""
+    return (
+        prefer_nfo(folder, media_stem) is not None,
+        prefer_poster(folder, media_stem) is not None,
+    )
 
 
 def read_strm(path: Path) -> str:
