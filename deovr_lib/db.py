@@ -128,13 +128,13 @@ class Database:
         from .classify import detect_kind, detect_region
 
         # 分类规则变更时递增；已达版本则跳过，避免每次启动全表 UPDATE
-        CLASSIFY_VER = 2
+        CLASSIFY_VER = 3
         ver = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
         if ver >= CLASSIFY_VER:
             return
 
         rows = conn.execute(
-            "SELECT id, code, title, folder_name, strm_path FROM movies"
+            "SELECT id, code, title, folder_name, strm_path, studio FROM movies"
         ).fetchall()
         for r in rows:
             mid = int(r["id"])
@@ -151,6 +151,7 @@ class Database:
                 genres=genres,
                 title=r["title"] or "",
                 path=r["strm_path"] or "",
+                studio=r["studio"] or "",
             )
             region = detect_region(
                 code=r["code"] or "",

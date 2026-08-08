@@ -54,13 +54,14 @@ def detect_projection(
     code: str = "",
     folder: str = "",
     genres: Iterable[Any] | None = None,
+    studio: str = "",
 ) -> ProjectionHint:
     """从单片元数据推断投影。混目录时使用，不读取 libraries.kind。"""
     from .classify import detect_kind
 
     names = _genre_names(genres)
-    # kind 以 NFO 为准，避免番号里的 -360/-180 误判
-    kind = detect_kind(genres=names, title=title, path=path)
+    # kind 以 NFO/片商为准，避免番号里的 -360/-180 误判
+    kind = detect_kind(genres=names, title=title, path=path, studio=studio)
 
     bits: list[str] = []
     stem = ""
@@ -146,4 +147,5 @@ def hint_from_movie(movie: dict[str, Any]) -> ProjectionHint:
         code=str(movie.get("code") or ""),
         folder=str(movie.get("folder_name") or ""),
         genres=movie.get("genres"),
+        studio=str(movie.get("studio") or ""),
     )

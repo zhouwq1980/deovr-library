@@ -176,8 +176,11 @@ def scan_library(
         actors = list(meta.actors) if meta else []
         genres = list(meta.genres) if meta else []
 
-        # 2D/VR、日本/欧美一律由 NFO/番号识别，不再回退到目录 kind
-        movie_kind = detect_kind(genres=genres, title=title, path=media_path)
+        studio = (meta.studio if meta else "") or ""
+        # 2D/VR、日本/欧美一律由 NFO/番号/片商识别，不再回退到目录 kind
+        movie_kind = detect_kind(
+            genres=genres, title=title, path=media_path, studio=studio
+        )
         region = detect_region(
             code=code or "",
             title=title,
@@ -191,7 +194,7 @@ def scan_library(
             code=code or "",
             title=title,
             plot=meta.plot if meta else "",
-            studio=meta.studio if meta else "",
+            studio=studio,
             year=meta.year if meta else None,
             aired=meta.aired if meta else "",
             rating=meta.rating if meta else None,

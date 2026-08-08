@@ -23,6 +23,8 @@ _VR_GENRE_RE = re.compile(
     r"(?i)vr専用|ハイクオリティ\s*vr|8k\s*vr|^vr$|virtual\s*reality|バーチャルリアリティ"
 )
 _VR_TITLE_RE = re.compile(r"(?i)\[vr\]|【vr】|\(vr\)|（vr）")
+# 片商名含 VR（如 KMPVR、VRBangers、SOD Create VR）
+_VR_STUDIO_RE = re.compile(r"(?i)vr")
 # 文件名明确投影标记（不含单独的 -360/-180 番号）
 _VR_STEM_RE = re.compile(
     r"(?i)(^|[._\-\s])(180_?sbs|360_?tb|360_?sbs|180_?tb|fisheye|mkx200|mkx220|"
@@ -47,11 +49,14 @@ def detect_kind(
     genres: Iterable[Any] | None = None,
     title: str = "",
     path: str = "",
+    studio: str = "",
 ) -> str:
-    """2d | vr。优先 NFO genre，其次标题 [VR]，再其次文件名投影标记。"""
+    """2d | vr。优先 NFO genre，其次片商含 VR，再标题 [VR] / 文件名投影标记。"""
     for g in _genre_names(genres):
         if g in VR_GENRE_EXACT or _VR_GENRE_RE.search(g):
             return "vr"
+    if studio and _VR_STUDIO_RE.search(studio):
+        return "vr"
     if _VR_TITLE_RE.search(title or ""):
         return "vr"
     stem = ""
