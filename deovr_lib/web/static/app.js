@@ -129,7 +129,7 @@
       ? `<img class="thumb" loading="lazy" src="/cover/${m.id}?v=${encodeURIComponent(rev)}" alt="" />`
       : `<div class="thumb missing">无封面</div>`;
     return `<a class="card" href="/m/${m.id}">
-      ${thumb}
+      <div class="thumb-wrap">${thumb}</div>
       <div class="body">
         <div class="code">${escapeHtml(code)}</div>
         <div class="title">${escapeHtml(m.title || "")}</div>
