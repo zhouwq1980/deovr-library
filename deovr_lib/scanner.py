@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from .classify import detect_kind, detect_region
 from .db import Database
 from .nfo import (
     DEFAULT_VIDEO_EXTS,
@@ -14,8 +15,6 @@ from .nfo import (
     prefer_poster,
     read_strm,
 )
-from .projection import detect_projection
-
 ProgressCb = Callable[[str, int, int], None]
 
 
@@ -112,17 +111,14 @@ def scan_library(
                 if 1 < len(tail) <= 20 and not extract_code(tail):
                     actors = [tail]
 
-        hint = detect_projection(
-            path=media_path,
-            title=title,
+        # 2D/VR、日本/欧美一律由 NFO/番号识别，不再回退到目录 kind
+        movie_kind = detect_kind(genres=genres, title=title, path=media_path)
+        region = detect_region(
             code=code or "",
+            title=title,
             folder=folder.name,
-            genres=genres,
+            path=media_path,
         )
-        movie_kind = hint.kind
-        lib_kind = (kind or "mixed").lower()
-        if lib_kind in ("2d", "vr") and hint.confidence == "none":
-            movie_kind = lib_kind
 
         is_new = media_path not in existing
         db.upsert_movie(
@@ -136,6 +132,7 @@ def scan_library(
             rating=meta.rating if meta else None,
             runtime=meta.runtime if meta else None,
             kind=movie_kind,
+            region=region,
             strm_path=media_path,
             strm_url=url,
             poster_path=str(poster) if poster else None,

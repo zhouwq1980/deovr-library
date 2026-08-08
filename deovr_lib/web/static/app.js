@@ -5,11 +5,13 @@
     pages: 1,
     total: 0,
     timer: null,
+    facetTimer: null,
   };
 
   const el = {
     q: document.getElementById("q"),
     kind: document.getElementById("kind"),
+    region: document.getElementById("region"),
     library_id: document.getElementById("library_id"),
     sort: document.getElementById("sort"),
     actor: document.getElementById("actor"),
@@ -36,6 +38,7 @@
   const pending = {
     q: pendingFilter("q"),
     kind: pendingFilter("kind"),
+    region: pendingFilter("region"),
     library_id: pendingFilter("library_id"),
     sort: pendingFilter("sort") || "updated",
     actor: pendingFilter("actor"),
@@ -45,8 +48,15 @@
   if (params.get("page")) state.page = Math.max(1, parseInt(params.get("page"), 10) || 1);
   if (el.q && pending.q) el.q.value = pending.q;
   if (el.kind && pending.kind) el.kind.value = pending.kind;
+  if (el.region && pending.region) el.region.value = pending.region;
   if (el.library_id && pending.library_id) el.library_id.value = pending.library_id;
   if (el.sort && pending.sort) el.sort.value = pending.sort;
+
+  function regionLabel(r) {
+    if (r === "jp") return "日本";
+    if (r === "western") return "欧美";
+    return "";
+  }
 
   function fillSelect(select, items, placeholder, preferred) {
     select.innerHTML = "";
@@ -72,20 +82,30 @@
     }
   }
 
+  function facetQuery() {
+    const sp = new URLSearchParams();
+    // 级联：片种/地区/目录/搜索 + 其它已选 facet 共同缩小选项
+    for (const k of ["q", "kind", "region", "library_id", "actor", "genre", "studio"]) {
+      const v = (el[k]?.value || "").trim();
+      if (v) sp.set(k, v);
+    }
+    return sp;
+  }
+
   async function loadFacets() {
-    const res = await fetch("/api/facets");
+    const res = await fetch(`/api/facets?${facetQuery().toString()}`);
     const data = await res.json();
-    fillSelect(el.actor, data.actors, "演员", pending.actor);
-    fillSelect(el.genre, data.genres, "类型", pending.genre);
-    fillSelect(el.studio, data.studios, "片商", pending.studio);
+    fillSelect(el.actor, data.actors, "演员", el.actor.value || pending.actor);
+    fillSelect(el.genre, data.genres, "类型", el.genre.value || pending.genre);
+    fillSelect(el.studio, data.studios, "片商", el.studio.value || pending.studio);
     if (el.movies && data.stats) el.movies.textContent = data.stats.movies;
   }
 
   function query() {
     const sp = new URLSearchParams();
-    const fields = ["q", "kind", "library_id", "sort", "actor", "genre", "studio"];
+    const fields = ["q", "kind", "region", "library_id", "sort", "actor", "genre", "studio"];
     for (const k of fields) {
-      const v = (el[k].value || "").trim();
+      const v = (el[k]?.value || "").trim();
       if (v) sp.set(k, v);
     }
     sp.set("page", String(state.page));
@@ -103,6 +123,8 @@
     const code = m.code || "";
     const actors = (m.actors || []).slice(0, 2).join(" / ");
     const rev = m.cover_token || m.id;
+    const region = regionLabel(m.region);
+    const badges = [(m.kind || "").toUpperCase(), region].filter(Boolean).join(" · ");
     const thumb = m.poster_path
       ? `<img class="thumb" loading="lazy" src="/cover/${m.id}?v=${encodeURIComponent(rev)}" alt="" />`
       : `<div class="thumb missing">无封面</div>`;
@@ -113,7 +135,7 @@
         <div class="title">${escapeHtml(m.title || "")}</div>
         <div class="meta">
           <span>${escapeHtml(actors || m.studio || m.library_name || "")}</span>
-          <span class="badge">${(m.kind || "").toUpperCase()}</span>
+          <span class="badge">${escapeHtml(badges)}</span>
         </div>
       </div>
     </a>`;
@@ -150,10 +172,25 @@
     state.timer = setTimeout(loadMovies, 220);
   }
 
-  ["kind", "library_id", "sort", "actor", "genre", "studio"].forEach((k) => {
-    el[k].addEventListener("change", scheduleLoad);
+  function scheduleFacetsAndLoad() {
+    state.page = 1;
+    clearTimeout(state.timer);
+    clearTimeout(state.facetTimer);
+    state.facetTimer = setTimeout(() => {
+      loadFacets().then(loadMovies);
+    }, 220);
+  }
+
+  // 片种/地区/目录/搜索变化 → 重载级联 facets + 列表
+  ["kind", "region", "library_id"].forEach((k) => {
+    el[k]?.addEventListener("change", scheduleFacetsAndLoad);
   });
-  el.q.addEventListener("input", scheduleLoad);
+  // 演员/类型/片商互相关联数量，也重载 facets
+  ["actor", "genre", "studio"].forEach((k) => {
+    el[k]?.addEventListener("change", scheduleFacetsAndLoad);
+  });
+  el.sort?.addEventListener("change", scheduleLoad);
+  el.q?.addEventListener("input", scheduleFacetsAndLoad);
   el.prev.addEventListener("click", () => {
     if (state.page > 1) {
       state.page -= 1;

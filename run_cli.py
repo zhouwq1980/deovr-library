@@ -440,7 +440,7 @@ def main(argv: list[str] | None = None) -> int:
         "--kind",
         choices=["mixed", "2d", "vr"],
         default="mixed",
-        help="mixed=混放(推荐，按文件名识别)；2d/vr=分目录时无线索才回退",
+        help="mixed=混放(推荐)；片种由 NFO 识别，目录 kind 不再强制 2D/VR",
     )
     la.set_defaults(func=cmd_library, action="add")
 

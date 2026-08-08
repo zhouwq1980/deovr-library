@@ -412,7 +412,7 @@ class LibraryGUI:
             anchor="w",
         ).pack(fill=X, pady=(1, 8))
 
-        fixed = _card(outer, "① 媒体目录（2D/VR 可混放）")
+        fixed = _card(outer, "① 媒体目录（NFO 自动识别 2D/VR · 日本/欧美）")
         row_mix = Frame(fixed, bg=CARD)
         row_mix.pack(fill=X, pady=(0, 4))
         Label(row_mix, text="混合", bg=CARD, fg=FG, font=FONT_B, width=3).pack(side=LEFT)
@@ -422,21 +422,21 @@ class LibraryGUI:
 
         row2d = Frame(fixed, bg=CARD)
         row2d.pack(fill=X, pady=(0, 4))
-        Label(row2d, text="2D", bg=CARD, fg=FG, font=FONT_B, width=3).pack(side=LEFT)
+        Label(row2d, text="附加", bg=CARD, fg=FG, font=FONT_B, width=3).pack(side=LEFT)
         _entry(row2d, self.path_2d_var, 36).pack(side=LEFT, padx=4, fill=X, expand=True)
         _btn(row2d, "选择…", lambda: self._pick_fixed("2d")).pack(side=LEFT, padx=(0, 4))
         _btn(row2d, "清除", lambda: self._clear_fixed("2d")).pack(side=LEFT)
 
         rowvr = Frame(fixed, bg=CARD)
         rowvr.pack(fill=X, pady=(0, 4))
-        Label(rowvr, text="VR", bg=CARD, fg=FG, font=FONT_B, width=3).pack(side=LEFT)
+        Label(rowvr, text="附加2", bg=CARD, fg=FG, font=FONT_B, width=3).pack(side=LEFT)
         _entry(rowvr, self.path_vr_var, 36).pack(side=LEFT, padx=4, fill=X, expand=True)
         _btn(rowvr, "选择…", lambda: self._pick_fixed("vr")).pack(side=LEFT, padx=(0, 4))
         _btn(rowvr, "清除", lambda: self._clear_fixed("vr")).pack(side=LEFT)
 
         Label(
             fixed,
-            text="推荐用「混合」；单片 2D/VR 按文件名(_180/_SBS/VR…)与 NFO 标签识别。可选分目录仅作筛选。改完请保存再强制扫描。",
+            text="目录只负责挂载文件。片种(2D/VR)看 NFO 类型（如 VR専用）；有番号=日本，无番号=欧美。网页筛选后片商/演员/类型会级联缩小。改完请保存；启动时会自动按 NFO 回填分类。",
             bg=CARD,
             fg=MUTED,
             font=FONT_S,

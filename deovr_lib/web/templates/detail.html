@@ -31,7 +31,7 @@
     <div class="info">
       <h2>{{ movie.title }}</h2>
       <dl>
-        <dt>目录</dt><dd>{{ movie.library_name }} · {{ movie.kind|upper }}</dd>
+        <dt>目录</dt><dd>{{ movie.library_name }} · {{ movie.kind|upper }}{% if movie.region == 'jp' %} · 日本{% elif movie.region == 'western' %} · 欧美{% endif %}</dd>
         {% if movie.studio %}<dt>片商</dt><dd><a href="/browse?studio={{ movie.studio | urlencode }}">{{ movie.studio }}</a></dd>{% endif %}
         {% if movie.year %}<dt>年份</dt><dd>{{ movie.year }}</dd>{% endif %}
         {% if movie.aired %}<dt>发售</dt><dd>{{ movie.aired }}</dd>{% endif %}

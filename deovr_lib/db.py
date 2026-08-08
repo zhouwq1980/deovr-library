@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS movies (
     rating REAL,
     runtime INTEGER,
     kind TEXT NOT NULL DEFAULT '2d',
+    region TEXT NOT NULL DEFAULT 'western',
     strm_path TEXT NOT NULL UNIQUE,
     strm_url TEXT,
     poster_path TEXT,
@@ -108,7 +109,60 @@ class Database:
     def _init(self) -> None:
         with self.session() as conn:
             conn.executescript(SCHEMA)
+            self._migrate_schema(conn)
             self._ensure_fts(conn)
+            self._reclassify_movies(conn)
+
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(movies)").fetchall()}
+        if "region" not in cols:
+            conn.execute(
+                "ALTER TABLE movies ADD COLUMN region TEXT NOT NULL DEFAULT 'western'"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_movies_region ON movies(region)"
+        )
+
+    def _reclassify_movies(self, conn: sqlite3.Connection) -> None:
+        """用已入库 genres/code 回填 kind、region（无需重扫文件）。"""
+        from .classify import detect_kind, detect_region
+
+        # 分类规则变更时递增；已达版本则跳过，避免每次启动全表 UPDATE
+        CLASSIFY_VER = 2
+        ver = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
+        if ver >= CLASSIFY_VER:
+            return
+
+        rows = conn.execute(
+            "SELECT id, code, title, folder_name, strm_path FROM movies"
+        ).fetchall()
+        for r in rows:
+            mid = int(r["id"])
+            genres = [
+                x["name"]
+                for x in conn.execute(
+                    """SELECT g.name FROM genres g
+                       JOIN movie_genres mg ON mg.genre_id=g.id
+                       WHERE mg.movie_id=?""",
+                    (mid,),
+                ).fetchall()
+            ]
+            kind = detect_kind(
+                genres=genres,
+                title=r["title"] or "",
+                path=r["strm_path"] or "",
+            )
+            region = detect_region(
+                code=r["code"] or "",
+                title=r["title"] or "",
+                folder=r["folder_name"] or "",
+                path=r["strm_path"] or "",
+            )
+            conn.execute(
+                "UPDATE movies SET kind=?, region=? WHERE id=?",
+                (kind, region, mid),
+            )
+        conn.execute(f"PRAGMA user_version={CLASSIFY_VER}")
 
     def _fts_sql_ok(self, sql: str) -> bool:
         """普通（非 contentless）+ trigram 才允许 DELETE/UPDATE。"""
@@ -274,6 +328,7 @@ class Database:
         rating: float | None,
         runtime: int | None,
         kind: str,
+        region: str = "western",
         strm_path: str,
         strm_url: str,
         poster_path: str | None,
@@ -284,6 +339,9 @@ class Database:
         actors: list[str],
         genres: list[str],
     ) -> int:
+        region = (region or "western").lower()
+        if region not in ("jp", "western"):
+            region = "western"
         with self.session() as conn:
             existing = conn.execute(
                 "SELECT id FROM movies WHERE strm_path=?", (strm_path,)
@@ -293,13 +351,13 @@ class Database:
                 conn.execute(
                     """UPDATE movies SET
                         library_id=?, code=?, title=?, plot=?, studio=?, year=?,
-                        aired=?, rating=?, runtime=?, kind=?, strm_url=?,
+                        aired=?, rating=?, runtime=?, kind=?, region=?, strm_url=?,
                         poster_path=?, nfo_path=?, nfo_mtime=?, strm_mtime=?,
                         folder_name=?, updated_at=datetime('now')
                     WHERE id=?""",
                     (
                         library_id, code, title, plot, studio, year,
-                        aired, rating, runtime, kind, strm_url,
+                        aired, rating, runtime, kind, region, strm_url,
                         poster_path, nfo_path, nfo_mtime, strm_mtime,
                         folder_name, mid,
                     ),
@@ -310,12 +368,12 @@ class Database:
                 cur = conn.execute(
                     """INSERT INTO movies(
                         library_id, code, title, plot, studio, year, aired, rating,
-                        runtime, kind, strm_path, strm_url, poster_path, nfo_path,
+                        runtime, kind, region, strm_path, strm_url, poster_path, nfo_path,
                         nfo_mtime, strm_mtime, folder_name
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         library_id, code, title, plot, studio, year, aired, rating,
-                        runtime, kind, strm_path, strm_url, poster_path, nfo_path,
+                        runtime, kind, region, strm_path, strm_url, poster_path, nfo_path,
                         nfo_mtime, strm_mtime, folder_name,
                     ),
                 )
@@ -400,7 +458,7 @@ class Database:
             ]
             return movie
 
-    def search_movies(
+    def _build_movie_filters(
         self,
         *,
         q: str = "",
@@ -408,13 +466,14 @@ class Database:
         genre: str = "",
         studio: str = "",
         kind: str = "",
+        region: str = "",
         library_id: int | None = None,
         year: int | None = None,
-        sort: str = "updated",
-        page: int = 1,
-        page_size: int = 48,
         hide_strm_without_nfo_poster: bool = False,
-    ) -> dict[str, Any]:
+        skip: frozenset[str] | set[str] | None = None,
+    ) -> tuple[list[str], list[str], list[Any]]:
+        """返回 (joins, where, params)。skip 可排除 actor/genre/studio 自身筛选。"""
+        skip = set(skip or ())
         where: list[str] = ["1=1"]
         params: list[Any] = []
         joins: list[str] = []
@@ -433,7 +492,7 @@ class Database:
                 like = f"%{token}%"
                 params.extend([fts_q, like, like, like])
 
-        if actor:
+        if actor and "actor" not in skip:
             joins.append(
                 "JOIN movie_actors ma ON ma.movie_id=m.id "
                 "JOIN actors a ON a.id=ma.actor_id"
@@ -441,7 +500,7 @@ class Database:
             where.append("a.name=?")
             params.append(actor)
 
-        if genre:
+        if genre and "genre" not in skip:
             joins.append(
                 "JOIN movie_genres mg ON mg.movie_id=m.id "
                 "JOIN genres g ON g.id=mg.genre_id"
@@ -449,12 +508,15 @@ class Database:
             where.append("g.name=?")
             params.append(genre)
 
-        if studio:
+        if studio and "studio" not in skip:
             where.append("m.studio=?")
             params.append(studio)
         if kind:
             where.append("m.kind=?")
             params.append(kind)
+        if region:
+            where.append("m.region=?")
+            params.append(region)
         if library_id:
             where.append("m.library_id=?")
             params.append(library_id)
@@ -462,7 +524,6 @@ class Database:
             where.append("m.year=?")
             params.append(year)
         if hide_strm_without_nfo_poster:
-            # .strm 须同时有封面与 NFO；非 strm（本地视频）始终显示
             where.append(
                 """(
                     LOWER(IFNULL(m.strm_path,'')) NOT LIKE '%.strm'
@@ -472,6 +533,35 @@ class Database:
                     )
                 )"""
             )
+        return joins, where, params
+
+    def search_movies(
+        self,
+        *,
+        q: str = "",
+        actor: str = "",
+        genre: str = "",
+        studio: str = "",
+        kind: str = "",
+        region: str = "",
+        library_id: int | None = None,
+        year: int | None = None,
+        sort: str = "updated",
+        page: int = 1,
+        page_size: int = 48,
+        hide_strm_without_nfo_poster: bool = False,
+    ) -> dict[str, Any]:
+        joins, where, params = self._build_movie_filters(
+            q=q,
+            actor=actor,
+            genre=genre,
+            studio=studio,
+            kind=kind,
+            region=region,
+            library_id=library_id,
+            year=year,
+            hide_strm_without_nfo_poster=hide_strm_without_nfo_poster,
+        )
 
         order = {
             "title": "m.title COLLATE NOCASE ASC",
@@ -482,7 +572,7 @@ class Database:
             "aired": "m.aired DESC",
         }.get(sort, "m.updated_at DESC")
 
-        join_sql = " ".join(dict.fromkeys(joins))  # dedupe
+        join_sql = " ".join(dict.fromkeys(joins))
         where_sql = " AND ".join(where)
         page = max(1, page)
         page_size = max(1, min(page_size, 200))
@@ -493,7 +583,7 @@ class Database:
             total = int(conn.execute(count_sql, params).fetchone()[0])
             list_sql = f"""
                 SELECT DISTINCT m.id, m.code, m.title, m.studio, m.year, m.rating,
-                       m.runtime, m.kind, m.poster_path, m.library_id, m.aired,
+                       m.runtime, m.kind, m.region, m.poster_path, m.library_id, m.aired,
                        l.name AS library_name
                 FROM movies m
                 JOIN libraries l ON l.id=m.library_id
@@ -504,7 +594,6 @@ class Database:
             """
             rows = conn.execute(list_sql, [*params, page_size, offset]).fetchall()
             items = [dict(r) for r in rows]
-            # attach actors briefly
             for item in items:
                 item["actors"] = [
                     r["name"]
@@ -523,33 +612,87 @@ class Database:
                 "items": items,
             }
 
-    def facet_actors(self, limit: int = 200) -> list[dict[str, Any]]:
+    def facet_actors(
+        self,
+        limit: int = 200,
+        *,
+        q: str = "",
+        kind: str = "",
+        region: str = "",
+        library_id: int | None = None,
+        genre: str = "",
+        studio: str = "",
+        hide_strm_without_nfo_poster: bool = False,
+    ) -> list[dict[str, Any]]:
+        joins, where, params = self._build_movie_filters(
+            q=q,
+            kind=kind,
+            region=region,
+            library_id=library_id,
+            genre=genre,
+            studio=studio,
+            hide_strm_without_nfo_poster=hide_strm_without_nfo_poster,
+            skip={"actor"},
+        )
+        join_sql = " ".join(dict.fromkeys(joins))
+        where_sql = " AND ".join(where)
         with self.session() as conn:
             rows = conn.execute(
-                """SELECT a.id, a.name, COUNT(*) AS cnt,
-                          (SELECT m.id FROM movies m
-                           JOIN movie_actors ma2 ON ma2.movie_id=m.id
-                           WHERE ma2.actor_id=a.id AND m.poster_path IS NOT NULL
-                             AND m.poster_path != ''
-                           ORDER BY m.updated_at DESC LIMIT 1) AS sample_id
-                   FROM actors a JOIN movie_actors ma ON ma.actor_id=a.id
+                f"""SELECT a.id, a.name, COUNT(DISTINCT m.id) AS cnt,
+                          (SELECT m2.id FROM movies m2
+                           JOIN movie_actors ma2 ON ma2.movie_id=m2.id
+                           WHERE ma2.actor_id=a.id AND m2.poster_path IS NOT NULL
+                             AND m2.poster_path != ''
+                           ORDER BY m2.updated_at DESC LIMIT 1) AS sample_id
+                   FROM actors a
+                   JOIN movie_actors ma ON ma.actor_id=a.id
+                   JOIN movies m ON m.id=ma.movie_id
+                   {join_sql}
+                   WHERE {where_sql}
                    GROUP BY a.id ORDER BY cnt DESC, a.name LIMIT ?""",
-                (limit,),
+                [*params, limit],
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def facet_genres(self, limit: int = 200) -> list[dict[str, Any]]:
+    def facet_genres(
+        self,
+        limit: int = 200,
+        *,
+        q: str = "",
+        kind: str = "",
+        region: str = "",
+        library_id: int | None = None,
+        actor: str = "",
+        studio: str = "",
+        hide_strm_without_nfo_poster: bool = False,
+    ) -> list[dict[str, Any]]:
+        joins, where, params = self._build_movie_filters(
+            q=q,
+            kind=kind,
+            region=region,
+            library_id=library_id,
+            actor=actor,
+            studio=studio,
+            hide_strm_without_nfo_poster=hide_strm_without_nfo_poster,
+            skip={"genre"},
+        )
+        join_sql = " ".join(dict.fromkeys(joins))
+        where_sql = " AND ".join(where)
         with self.session() as conn:
             rows = conn.execute(
-                """SELECT g.id, g.name, COUNT(*) AS cnt,
-                          (SELECT m.id FROM movies m
-                           JOIN movie_genres mg2 ON mg2.movie_id=m.id
-                           WHERE mg2.genre_id=g.id AND m.poster_path IS NOT NULL
-                             AND m.poster_path != ''
-                           ORDER BY m.updated_at DESC LIMIT 1) AS sample_id
-                   FROM genres g JOIN movie_genres mg ON mg.genre_id=g.id
+                f"""SELECT g.id, g.name, COUNT(DISTINCT m.id) AS cnt,
+                          (SELECT m2.id FROM movies m2
+                           JOIN movie_genres mg2 ON mg2.movie_id=m2.id
+                           WHERE mg2.genre_id=g.id AND m2.poster_path IS NOT NULL
+                             AND m2.poster_path != ''
+                           ORDER BY m2.updated_at DESC LIMIT 1) AS sample_id
+                   FROM genres g
+                   JOIN movie_genres mg ON mg.genre_id=g.id
+                   JOIN movies m ON m.id=mg.movie_id
+                   {join_sql}
+                   WHERE {where_sql}
                    GROUP BY g.id ORDER BY cnt DESC, g.name LIMIT ?""",
-                (limit,),
+                [*params, limit],
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -563,18 +706,43 @@ class Database:
             row = conn.execute("SELECT name FROM actors WHERE id=?", (actor_id,)).fetchone()
             return row["name"] if row else None
 
-    def facet_studios(self, limit: int = 200) -> list[dict[str, Any]]:
+    def facet_studios(
+        self,
+        limit: int = 200,
+        *,
+        q: str = "",
+        kind: str = "",
+        region: str = "",
+        library_id: int | None = None,
+        actor: str = "",
+        genre: str = "",
+        hide_strm_without_nfo_poster: bool = False,
+    ) -> list[dict[str, Any]]:
+        joins, where, params = self._build_movie_filters(
+            q=q,
+            kind=kind,
+            region=region,
+            library_id=library_id,
+            actor=actor,
+            genre=genre,
+            hide_strm_without_nfo_poster=hide_strm_without_nfo_poster,
+            skip={"studio"},
+        )
+        join_sql = " ".join(dict.fromkeys(joins))
+        where_sql = " AND ".join(where)
         with self.session() as conn:
             rows = conn.execute(
-                """SELECT studio AS name, COUNT(*) AS cnt,
-                          (SELECT m.id FROM movies m
-                           WHERE m.studio=movies.studio AND m.poster_path IS NOT NULL
-                             AND m.poster_path != ''
-                           ORDER BY m.updated_at DESC LIMIT 1) AS sample_id
-                   FROM movies
-                   WHERE studio IS NOT NULL AND studio != ''
-                   GROUP BY studio ORDER BY cnt DESC, studio LIMIT ?""",
-                (limit,),
+                f"""SELECT m.studio AS name, COUNT(DISTINCT m.id) AS cnt,
+                          (SELECT m2.id FROM movies m2
+                           WHERE m2.studio=m.studio AND m2.poster_path IS NOT NULL
+                             AND m2.poster_path != ''
+                           ORDER BY m2.updated_at DESC LIMIT 1) AS sample_id
+                   FROM movies m
+                   {join_sql}
+                   WHERE {where_sql}
+                     AND m.studio IS NOT NULL AND m.studio != ''
+                   GROUP BY m.studio ORDER BY cnt DESC, m.studio LIMIT ?""",
+                [*params, limit],
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -582,6 +750,7 @@ class Database:
         self,
         *,
         kind: str | None = None,
+        region: str | None = None,
         library_id: int | None = None,
         limit: int = 500,
         hide_strm_without_nfo_poster: bool = False,
@@ -591,6 +760,9 @@ class Database:
         if kind:
             where.append("kind=?")
             params.append(kind)
+        if region:
+            where.append("region=?")
+            params.append(region)
         if library_id:
             where.append("library_id=?")
             params.append(library_id)
@@ -607,7 +779,7 @@ class Database:
         params.append(limit)
         with self.session() as conn:
             rows = conn.execute(
-                f"""SELECT id, title, runtime, poster_path, kind, code
+                f"""SELECT id, title, runtime, poster_path, kind, region, code
                     FROM movies WHERE {' AND '.join(where)}
                     ORDER BY updated_at DESC LIMIT ?""",
                 params,
@@ -620,6 +792,12 @@ class Database:
                 r["kind"]: r["cnt"]
                 for r in conn.execute(
                     "SELECT kind, COUNT(*) AS cnt FROM movies GROUP BY kind"
+                ).fetchall()
+            }
+            by_region = {
+                r["region"]: r["cnt"]
+                for r in conn.execute(
+                    "SELECT region, COUNT(*) AS cnt FROM movies GROUP BY region"
                 ).fetchall()
             }
             by_lib = [
@@ -635,5 +813,6 @@ class Database:
                 "actors": int(conn.execute("SELECT COUNT(*) FROM actors").fetchone()[0]),
                 "genres": int(conn.execute("SELECT COUNT(*) FROM genres").fetchone()[0]),
                 "by_kind": by_kind,
+                "by_region": by_region,
                 "by_library": by_lib,
             }

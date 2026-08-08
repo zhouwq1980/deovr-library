@@ -378,6 +378,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         request: Request,
         *,
         kind: str | None = None,
+        region: str | None = None,
         genre: str | None = None,
         actor: str | None = None,
         studio: str | None = None,
@@ -430,6 +431,13 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             label = {"2d": "2D", "vr": "VR"}.get(kind, kind.upper())
             return deovr_scene_from_movies(request, label, items)
 
+        if region:
+            items = database.list_for_deovr(
+                region=region, limit=limit, hide_strm_without_nfo_poster=hide
+            )
+            label = {"jp": "日本", "western": "欧美"}.get(region, region)
+            return deovr_scene_from_movies(request, label, items)
+
         if library_id:
             lib_name = next(
                 (x["name"] for x in database.list_libraries() if x["id"] == library_id),
@@ -466,6 +474,15 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         for k, label in (("2d", "2D"), ("vr", "VR")):
             items = database.list_for_deovr(
                 kind=k, limit=min(100, limit), hide_strm_without_nfo_poster=hide
+            )
+            if items:
+                scenes.append(
+                    {"name": label, "list": [deovr_list_item(request, m) for m in items]}
+                )
+
+        for r, label in (("jp", "日本"), ("western", "欧美")):
+            items = database.list_for_deovr(
+                region=r, limit=min(100, limit), hide_strm_without_nfo_poster=hide
             )
             if items:
                 scenes.append(
@@ -526,7 +543,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
     async def browse_home(request: Request):
         # 从 query 注入初始筛选（详情页分类标签跳转依赖此）
         init: dict[str, Any] = {}
-        for key in ("q", "kind", "library_id", "sort", "actor", "genre", "studio"):
+        for key in ("q", "kind", "region", "library_id", "sort", "actor", "genre", "studio"):
             val = request.query_params.get(key)
             if val is not None and str(val).strip() != "":
                 init[key] = unquote(str(val))
@@ -553,6 +570,17 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         if k not in ("2d", "vr"):
             raise HTTPException(404)
         return RedirectResponse(url=f"/browse?kind={k}", status_code=302)
+
+    @app.get("/region/{name}", response_class=HTMLResponse)
+    async def browse_region(name: str):
+        r = name.lower().strip()
+        if r in ("japan", "日", "日本"):
+            r = "jp"
+        elif r in ("west", "western", "欧美", "歐美"):
+            r = "western"
+        if r not in ("jp", "western"):
+            raise HTTPException(404)
+        return RedirectResponse(url=f"/browse?region={r}", status_code=302)
 
     @app.get("/m/{movie_id}", response_class=HTMLResponse)
     async def movie_page(request: Request, movie_id: int):
@@ -670,6 +698,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         genre: str = "",
         studio: str = "",
         kind: str = "",
+        region: str = "",
         library_id: int | None = None,
         year: int | None = None,
         sort: str = "updated",
@@ -687,6 +716,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             genre=genre,
             studio=studio,
             kind=kind,
+            region=region,
             library_id=library_id,
             year=year,
             sort=sort,
@@ -701,11 +731,39 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         return data
 
     @app.get("/api/facets")
-    async def api_facets():
+    async def api_facets(
+        q: str = "",
+        kind: str = "",
+        region: str = "",
+        library_id: int | None = None,
+        actor: str = "",
+        genre: str = "",
+        studio: str = "",
+    ):
+        try:
+            cfg_l = load_config()
+            app.state.cfg = cfg_l
+        except Exception:
+            cfg_l = app.state.cfg
+        hide = bool(cfg_l.get("hide_strm_without_nfo_poster"))
+        # 级联：片商/类型/演员随 kind·region·其它筛选缩小选项与数量
+        common = dict(
+            q=q,
+            kind=kind,
+            region=region,
+            library_id=library_id,
+            hide_strm_without_nfo_poster=hide,
+        )
         return {
-            "actors": database.facet_actors(300),
-            "genres": database.facet_genres(300),
-            "studios": database.facet_studios(200),
+            "actors": database.facet_actors(
+                300, **common, genre=genre, studio=studio
+            ),
+            "genres": database.facet_genres(
+                300, **common, actor=actor, studio=studio
+            ),
+            "studios": database.facet_studios(
+                200, **common, actor=actor, genre=genre
+            ),
             "libraries": database.list_libraries(),
             "stats": database.stats(),
         }
@@ -790,54 +848,102 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             app.state.cfg = cfg_l
         except Exception:
             cfg_l = app.state.cfg
-        url = media_url_for_client(request, movie)
-        if not url or not is_http_url(url):
+
+        # 给浏览器/远程的「直链」：解析到公网 CDN（不要把 127.0.0.1 甩给外网）
+        client_url = media_url_for_client(request, movie)
+        if not client_url or not is_http_url(client_url):
             raise HTTPException(404, "无有效播放地址（STRM 为空或本地文件缺失）")
 
-        # 默认代理：头显常打不开浏览器能下的 CDN 直链（UA/防盗链/过期签名）
         force_redirect = (request.query_params.get("redirect") or "").lower() in (
             "1",
             "true",
             "yes",
         )
         if force_redirect or not cfg_l.get("proxy_strm", True):
-            return RedirectResponse(url=url, status_code=302)
+            return RedirectResponse(url=client_url, status_code=302)
 
         try:
             import httpx
         except ImportError:
-            return RedirectResponse(url=url, status_code=302)
+            return RedirectResponse(url=client_url, status_code=302)
 
-        upstream_headers = {
-            "User-Agent": (
+        # 代理上游：
+        # - STRM 是 127.0.0.1/私网 115 网关 → 服务端跟原始地址（本机可访问）
+        #   Chrome UA 直打 CDN 常 403 invalid signature；经网关跟随则正常
+        # - 已是公网 CDN → 用轻量 UA，避免伪装浏览器破坏签名
+        raw_host = (urlparse(raw).hostname or "").lower()
+        if is_private_or_loopback_host(raw_host):
+            upstream_url = raw
+            upstream_ua = (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            ),
+            )
+        else:
+            upstream_url = client_url
+            upstream_ua = "DeoVR-Library/1.0"
+
+        upstream_headers = {
+            "User-Agent": upstream_ua,
             "Accept": "*/*",
         }
         range_h = request.headers.get("range") or request.headers.get("Range")
         if range_h:
             upstream_headers["Range"] = range_h
 
-        client = httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(60.0, connect=15.0))
-        try:
-            upstream = await client.send(
-                client.build_request(
-                    request.method if request.method in ("GET", "HEAD") else "GET",
-                    url,
-                    headers=upstream_headers,
-                ),
-                stream=True,
+        async def _open_upstream(fetch_url: str, headers: dict[str, str]):
+            client = httpx.AsyncClient(
+                follow_redirects=True, timeout=httpx.Timeout(60.0, connect=15.0)
             )
+            try:
+                upstream = await client.send(
+                    client.build_request(
+                        request.method if request.method in ("GET", "HEAD") else "GET",
+                        fetch_url,
+                        headers=headers,
+                    ),
+                    stream=True,
+                )
+                return client, upstream
+            except Exception:
+                await client.aclose()
+                raise
+
+        try:
+            client, upstream = await _open_upstream(upstream_url, upstream_headers)
         except Exception as e:
-            await client.aclose()
             raise HTTPException(502, f"上游媒体不可用: {e}") from e
+
+        # 若误走 CDN 直链 403，且原始是本机网关，回退经网关再拉
+        if (
+            upstream.status_code >= 400
+            and upstream_url != raw
+            and is_private_or_loopback_host(raw_host)
+        ):
+            await upstream.aread()
+            await upstream.aclose()
+            await client.aclose()
+            try:
+                client, upstream = await _open_upstream(
+                    raw,
+                    {
+                        **upstream_headers,
+                        "User-Agent": (
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/120.0.0.0 Safari/537.36"
+                        ),
+                    },
+                )
+            except Exception as e:
+                raise HTTPException(502, f"上游媒体不可用: {e}") from e
 
         if upstream.status_code >= 400:
             body = await upstream.aread()
             await upstream.aclose()
             await client.aclose()
-            raise HTTPException(upstream.status_code, body.decode("utf-8", errors="ignore")[:200])
+            raise HTTPException(
+                upstream.status_code, body.decode("utf-8", errors="ignore")[:200]
+            )
 
         out_headers: dict[str, str] = {
             "Access-Control-Allow-Origin": "*",
@@ -931,6 +1037,17 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         if k not in ("2d", "vr"):
             raise HTTPException(404, "kind 仅为 2d 或 vr")
         return deo_json(build_deovr_library(request, kind=k))
+
+    @app.api_route("/deovr/region/{region}", methods=["GET", "POST", "HEAD", "OPTIONS"])
+    async def deovr_by_region(request: Request, region: str):
+        r = region.lower().strip()
+        if r in ("japan", "日", "日本"):
+            r = "jp"
+        elif r in ("west", "western", "欧美", "歐美"):
+            r = "western"
+        if r not in ("jp", "western"):
+            raise HTTPException(404, "region 仅为 jp 或 western")
+        return deo_json(build_deovr_library(request, region=r))
 
     @app.api_route("/deovr/library/{library_id}", methods=["GET", "POST", "HEAD", "OPTIONS"])
     async def deovr_by_library(request: Request, library_id: int):
