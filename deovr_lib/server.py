@@ -16,9 +16,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .config import DEFAULT_CONFIG, load_config, save_config
 from .db import Database
 from .media import (
-    clear_play_upstream,
-    gateway_url_variants,
-    get_play_upstream,
     is_private_or_loopback_host,
     is_public_https_url,
     local_115_proxy_bases,
@@ -679,7 +676,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         """便于确认远端机器是否已拉到最新 play 代理逻辑。"""
         return {
             "name": "deovr-library",
-            "play_proxy": "serialize-retry-pmt-v1",
+            "play_proxy": "serialize-retry-pmt-v2",
             "features": [
                 "115_pickcode_proxy",
                 "play_serialize_per_movie",
@@ -1000,9 +997,8 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             return RedirectResponse(url=client_url, status_code=302)
 
         # 代理上游（快进 = 新 Range）：
-        # 115 对并发多路 Range 会回 403「pmt」→ 表现为快进几下 502。
-        # 对策：同片串行开流、关掉上一路、403 退避重试；优先 rewrite_to 上的 /d|/play，
-        # 不要并行打旧主机（如 .16）和过期 CDN。
+        # 115 对并发/连打会回 403「pmt」：先 206 再快进 → 502 很常见。
+        # 对策：同片串行；关掉上一路后冷却；403 只对同一地址退避重试（禁止连打一串候选）。
         raw_host = (urlparse(raw).hostname or "").lower()
         browser_ua = (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -1020,7 +1016,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         async def _open_upstream(fetch_url: str, headers: dict[str, str]):
             client = httpx.AsyncClient(
                 follow_redirects=True,
-                timeout=httpx.Timeout(60.0, connect=2.5),
+                timeout=httpx.Timeout(60.0, connect=3.0),
                 trust_env=False,
             )
             try:
@@ -1055,44 +1051,37 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             if target
             else raw
         )
-        proxy_bases = local_115_proxy_bases(target)
-        proxy_play_urls = play115_proxy_urls(raw, proxy_bases)
 
-        candidates: list[str] = []
+        # 主地址：rewrite_to 上的原路径（多为 /d/pickcode/file）；少而精
+        primary = ""
+        fallbacks: list[str] = []
         seen: set[str] = set()
 
-        def _add(url: str) -> None:
-            for u in _115_path_variants(url):
-                u = (u or "").strip()
-                if not u or u in seen:
-                    continue
-                seen.add(u)
-                candidates.append(u)
+        def _push(url: str, *, into_primary: bool = False) -> None:
+            nonlocal primary
+            u = (url or "").strip()
+            if not u or u in seen:
+                return
+            seen.add(u)
+            if into_primary and not primary:
+                primary = u
+            else:
+                fallbacks.append(u)
 
         if is_private_or_loopback_host(raw_host):
-            # 1) rewrite_to 上的现成 /d|/play（.25:11500）
-            _add(rewritten)
-            # 2) 本机回环同路径（服务与 115 同机时）
-            if rewritten and is_http_url(rewritten):
-                p = urlparse(rewritten)
-                local = urlunparse(p._replace(netloc=f"127.0.0.1:{p.port or 11500}"))
-                _add(local)
-            for u in proxy_play_urls:
-                _add(u)
-            if target:
-                for gw in gateway_url_variants(
-                    raw, target, rewrite_from=cfg_l.get("rewrite_from")
-                ):
-                    _add(gw)
-            # 旧主机（如 .16）最后才试，避免 Connection refused 干扰
-            if rewritten and rewritten != raw:
-                pass  # skip raw dead host in first pass
-            else:
-                _add(raw)
+            _push(rewritten or raw, into_primary=True)
+            # 仅保留少量回退：同机 127.0.0.1、/d↔/play、play115 转换
+            if primary and is_http_url(primary):
+                p = urlparse(primary)
+                _push(urlunparse(p._replace(netloc=f"127.0.0.1:{p.port or 11500}")))
+                for alt in _115_path_variants(primary):
+                    _push(alt)
+            for u in play115_proxy_urls(raw, local_115_proxy_bases(target)):
+                _push(u)
         else:
-            _add(client_url if is_http_url(client_url) else raw)
+            _push(client_url if is_http_url(client_url) else raw, into_primary=True)
 
-        if not candidates:
+        if not primary:
             raise HTTPException(502, "无可用上游播放地址")
 
         play_lock = await _play_lock_for(movie_id)
@@ -1101,56 +1090,66 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         last_status = 0
         used_fetch = ""
 
+        async def _try_url(fetch_url: str, retries: int) -> bool:
+            """对同一 URL 重试；403/pmt 只退避，不换地址狂打。"""
+            nonlocal client, upstream, gateway_err, last_status, used_fetch
+            for i in range(retries):
+                try:
+                    client, upstream = await _open_upstream(
+                        fetch_url, upstream_headers
+                    )
+                except Exception as e:
+                    gateway_err = e
+                    client = upstream = None
+                    await asyncio.sleep(0.25 * (i + 1))
+                    continue
+                if upstream.status_code < 400:
+                    gateway_err = None
+                    used_fetch = fetch_url
+                    return True
+                last_status = upstream.status_code
+                try:
+                    body = (await upstream.aread())[:160]
+                except Exception:
+                    body = b""
+                gateway_err = Exception(
+                    f"HTTP {upstream.status_code} from {fetch_url[:80]} {body!r}"
+                )
+                await _shutdown(client, upstream)
+                client = upstream = None
+                if last_status in (401, 403, 429, 503):
+                    # 115 pmt：冷却后再打同一地址
+                    await asyncio.sleep(0.45 * (i + 1))
+                    continue
+                # 其它 4xx：换候选
+                break
+            return False
+
         async with play_lock:
-            # 快进时先拆掉上一路，降低 115 并发 pmt
             prev = _play_active_closers.pop(movie_id, None)
             if prev is not None:
                 try:
                     await prev()
                 except Exception:
                     pass
-                await asyncio.sleep(0.05)
+                # 关键上一路后必须冷却，否则下一次 Range 极易 403 pmt → 502
+                await asyncio.sleep(0.4)
 
-            for attempt in range(6):
-                clear_play_upstream(movie_id)
-                for fetch_url in candidates:
-                    try:
-                        client, upstream = await _open_upstream(
-                            fetch_url, upstream_headers
-                        )
-                    except Exception as e:
-                        gateway_err = e
-                        client = upstream = None
-                        continue
-                    if upstream.status_code < 400:
-                        gateway_err = None
-                        used_fetch = fetch_url
+            ok = await _try_url(primary, retries=6)
+            if not ok:
+                for fb in fallbacks:
+                    if await _try_url(fb, retries=3):
+                        ok = True
                         break
-                    last_status = upstream.status_code
-                    try:
-                        body = (await upstream.aread())[:120]
-                    except Exception:
-                        body = b""
-                    gateway_err = Exception(
-                        f"HTTP {upstream.status_code} from {fetch_url[:70]} {body!r}"
-                    )
-                    await _shutdown(client, upstream)
-                    client = upstream = None
-                    # pmt / signature：换候选或退避后重试
-                    if last_status in (401, 403):
-                        continue
-                if upstream is not None:
-                    break
-                await asyncio.sleep(0.15 * (attempt + 1))
 
-            if upstream is None or client is None:
+            if not ok or upstream is None or client is None:
                 port = urlparse(raw).port or 80
                 rw = target or "(未配置)"
                 raise HTTPException(
                     502,
-                    f"无法连接 115 播放网关/CDN（HTTP {last_status or 'n/a'}）。"
-                    f"STRM={raw_host}:{port}，rewrite_to={rw}。"
-                    f"快进触发 115 并发限制(pmt)时会重试；若仍失败请稍后再拖。"
+                    f"无法连接 115（HTTP {last_status or 'n/a'}）。"
+                    f"STRM={raw_host}:{port}，rewrite_to={rw}，primary={primary[:90]}。"
+                    f"快进过快会触发 115 pmt 限制，请稍缓再拖。"
                     + (f" 详情: {gateway_err}" if gateway_err else ""),
                 )
 
