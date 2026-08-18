@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 from pathlib import Path
-from typing import Any
-from urllib.parse import quote, unquote, urlparse
+from typing import Any, Callable, Awaitable
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -47,6 +48,34 @@ _jinja = Environment(
 _jinja.filters["tojson"] = lambda v: _json.dumps(v, ensure_ascii=False)
 # 在 script 里输出 JSON 时需 |safe，避免 &#34; 转义弄坏 JS
 
+# /play 同片并发 Range（快进）会触发 115「pmt」403；按影片串行开流并关掉上一路
+_play_open_locks: dict[int, asyncio.Lock] = {}
+_play_lock_guard = asyncio.Lock()
+_play_active_closers: dict[int, Callable[[], Awaitable[None]]] = {}
+
+
+async def _play_lock_for(movie_id: int) -> asyncio.Lock:
+    async with _play_lock_guard:
+        lock = _play_open_locks.get(movie_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _play_open_locks[movie_id] = lock
+        return lock
+
+
+def _115_path_variants(url: str) -> list[str]:
+    """同一 pickcode 下 /d/ 与 /play/ 都试一下。"""
+    u = (url or "").strip()
+    if not u:
+        return []
+    out = [u]
+    if "/play115/" in u:
+        return out
+    if "/d/" in u:
+        out.append(u.replace("/d/", "/play/", 1))
+    elif "/play/" in u:
+        out.append(u.replace("/play/", "/d/", 1))
+    return out
 
 def _render(name: str, **ctx: Any) -> HTMLResponse:
     return HTMLResponse(_jinja.get_template(name).render(**ctx))
@@ -641,6 +670,20 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             detected_ip=detected or "",
         )
 
+    @app.get("/api/version")
+    async def api_version():
+        """便于确认远端机器是否已拉到最新 play 代理逻辑。"""
+        return {
+            "name": "deovr-library",
+            "play_proxy": "serialize-retry-pmt-v1",
+            "features": [
+                "115_pickcode_proxy",
+                "play_serialize_per_movie",
+                "retry_on_403_pmt",
+                "prefer_rewrite_to_d_play",
+            ],
+        }
+
     @app.get("/api/settings")
     async def api_get_settings():
         try:
@@ -953,20 +996,18 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             return RedirectResponse(url=client_url, status_code=302)
 
         # 代理上游（快进 = 新 Range）：
-        # 115 CDN 直打必须用浏览器 UA（轻量 UA → invalid signature 403）。
-        # STRM 的 /play115/... 在 11500「视频代理」上是 404，需转成 /play/{pickcode}/{file}。
-        # 优先经本机 11500 跟跳（每次 Range 都稳）；CDN 缓存仅作加速且用浏览器 UA。
+        # 115 对并发多路 Range 会回 403「pmt」→ 表现为快进几下 502。
+        # 对策：同片串行开流、关掉上一路、403 退避重试；优先 rewrite_to 上的 /d|/play，
+        # 不要并行打旧主机（如 .16）和过期 CDN。
         raw_host = (urlparse(raw).hostname or "").lower()
         browser_ua = (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        # 115 CDN 不要用轻量 UA
-        cdn_ua = browser_ua
-        gateway_ua = browser_ua
 
         upstream_headers = {
             "Accept": "*/*",
+            "User-Agent": browser_ua,
         }
         range_h = request.headers.get("range") or request.headers.get("Range")
         if range_h:
@@ -975,7 +1016,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         async def _open_upstream(fetch_url: str, headers: dict[str, str]):
             client = httpx.AsyncClient(
                 follow_redirects=True,
-                timeout=httpx.Timeout(60.0, connect=3.0),
+                timeout=httpx.Timeout(60.0, connect=2.5),
                 trust_env=False,
             )
             try:
@@ -992,129 +1033,131 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 await client.aclose()
                 raise
 
+        async def _shutdown(c, u) -> None:
+            if u is not None:
+                try:
+                    await u.aclose()
+                except Exception:
+                    pass
+            if c is not None:
+                try:
+                    await c.aclose()
+                except Exception:
+                    pass
+
         target = rewrite_target(request)
+        rewritten = (
+            rewrite_loopback(raw, target, rewrite_from=cfg_l.get("rewrite_from"))
+            if target
+            else raw
+        )
         proxy_bases = local_115_proxy_bases(target)
         proxy_play_urls = play115_proxy_urls(raw, proxy_bases)
 
-        def _cdn_url(*, force: bool = False) -> str:
-            if not force:
-                cached = get_play_upstream(movie_id)
-                if cached:
-                    return cached
-                if is_public_https_url(client_url):
-                    return client_url
-            ttl = int(cfg_l.get("media_url_cache_ttl") or 300)
-            starts: list[str] = list(proxy_play_urls)
-            if target:
-                starts.extend(
-                    gateway_url_variants(
-                        raw, target, rewrite_from=cfg_l.get("rewrite_from")
-                    )
-                )
-            starts.append(raw)
-            seen_s: set[str] = set()
-            for start in starts:
-                if not start or start in seen_s:
-                    continue
-                seen_s.add(start)
-                try:
-                    resolved = resolve_media_url(
-                        start,
-                        lan_host="",
-                        ttl=ttl,
-                        use_cache=not force,
-                    )
-                except Exception:
-                    continue
-                if is_public_https_url(resolved):
-                    return resolved
-            return ""
-
-        # 候选：115视频代理 /play/pc/name（本机11500）→ CDN(浏览器UA) → 旧 play115 多端口
-        candidates: list[tuple[str, str]] = []
+        candidates: list[str] = []
         seen: set[str] = set()
 
-        def _add(url: str, ua: str) -> None:
-            u = (url or "").strip()
-            if not u or u in seen:
-                return
-            seen.add(u)
-            candidates.append((u, ua))
+        def _add(url: str) -> None:
+            for u in _115_path_variants(url):
+                u = (u or "").strip()
+                if not u or u in seen:
+                    continue
+                seen.add(u)
+                candidates.append(u)
 
         if is_private_or_loopback_host(raw_host):
+            # 1) rewrite_to 上的现成 /d|/play（.25:11500）
+            _add(rewritten)
+            # 2) 本机回环同路径（服务与 115 同机时）
+            if rewritten and is_http_url(rewritten):
+                p = urlparse(rewritten)
+                local = urlunparse(p._replace(netloc=f"127.0.0.1:{p.port or 11500}"))
+                _add(local)
             for u in proxy_play_urls:
-                _add(u, gateway_ua)
-            # CDN 仅作次选：签名过期会 403，再回退代理
-            _add(_cdn_url(), cdn_ua)
+                _add(u)
             if target:
                 for gw in gateway_url_variants(
                     raw, target, rewrite_from=cfg_l.get("rewrite_from")
                 ):
-                    _add(gw, gateway_ua)
-            _add(raw, gateway_ua)
+                    _add(gw)
+            # 旧主机（如 .16）最后才试，避免 Connection refused 干扰
+            if rewritten and rewritten != raw:
+                pass  # skip raw dead host in first pass
+            else:
+                _add(raw)
         else:
-            _add(client_url if is_http_url(client_url) else raw, cdn_ua)
+            _add(client_url if is_http_url(client_url) else raw)
 
         if not candidates:
             raise HTTPException(502, "无可用上游播放地址")
 
+        play_lock = await _play_lock_for(movie_id)
         gateway_err: Exception | None = None
         client = upstream = None  # type: ignore
         last_status = 0
         used_fetch = ""
-        for fetch_url, ua in candidates:
-            headers = {**upstream_headers, "User-Agent": ua}
-            try:
-                client, upstream = await _open_upstream(fetch_url, headers)
-            except Exception as e:
-                gateway_err = e
-                client = upstream = None
-                if is_public_https_url(fetch_url):
-                    clear_play_upstream(movie_id)
-                continue
-            if upstream.status_code < 400:
-                gateway_err = None
-                used_fetch = fetch_url
-                break
-            last_status = upstream.status_code
-            gateway_err = Exception(f"HTTP {upstream.status_code} from {fetch_url[:80]}")
-            if is_public_https_url(fetch_url) or upstream.status_code in (401, 403, 404):
-                clear_play_upstream(movie_id)
-            try:
-                await upstream.aread()
-            except Exception:
-                pass
-            await upstream.aclose()
-            await client.aclose()
-            client = upstream = None
 
-        if upstream is None or client is None:
-            port = urlparse(raw).port or 80
-            rw = target or "(未配置)"
-            tip = ""
-            if proxy_play_urls:
-                tip = f" 已尝试视频代理: {proxy_play_urls[0][:90]}"
-            if is_private_or_loopback_host(raw_host):
+        async with play_lock:
+            # 快进时先拆掉上一路，降低 115 并发 pmt
+            prev = _play_active_closers.pop(movie_id, None)
+            if prev is not None:
+                try:
+                    await prev()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.05)
+
+            for attempt in range(6):
+                clear_play_upstream(movie_id)
+                for fetch_url in candidates:
+                    try:
+                        client, upstream = await _open_upstream(
+                            fetch_url, upstream_headers
+                        )
+                    except Exception as e:
+                        gateway_err = e
+                        client = upstream = None
+                        continue
+                    if upstream.status_code < 400:
+                        gateway_err = None
+                        used_fetch = fetch_url
+                        break
+                    last_status = upstream.status_code
+                    try:
+                        body = (await upstream.aread())[:120]
+                    except Exception:
+                        body = b""
+                    gateway_err = Exception(
+                        f"HTTP {upstream.status_code} from {fetch_url[:70]} {body!r}"
+                    )
+                    await _shutdown(client, upstream)
+                    client = upstream = None
+                    # pmt / signature：换候选或退避后重试
+                    if last_status in (401, 403):
+                        continue
+                if upstream is not None:
+                    break
+                await asyncio.sleep(0.15 * (attempt + 1))
+
+            if upstream is None or client is None:
+                port = urlparse(raw).port or 80
+                rw = target or "(未配置)"
                 raise HTTPException(
                     502,
-                    f"无法连接 115 播放网关/CDN（Connection refused / HTTP {last_status or 'n/a'}）。"
+                    f"无法连接 115 播放网关/CDN（HTTP {last_status or 'n/a'}）。"
                     f"STRM={raw_host}:{port}，rewrite_to={rw}。"
-                    f"请确认本机 115 视频代理（常见 :11500，路径 /play/pickcode/文件名）在运行。"
-                    + tip
+                    f"快进触发 115 并发限制(pmt)时会重试；若仍失败请稍后再拖。"
                     + (f" 详情: {gateway_err}" if gateway_err else ""),
                 )
-            raise HTTPException(502, f"上游媒体不可用: {gateway_err}")
 
-        if upstream.status_code >= 400:
-            body = await upstream.aread()
-            await upstream.aclose()
-            await client.aclose()
-            clear_play_upstream(movie_id)
-            raise HTTPException(
-                upstream.status_code, body.decode("utf-8", errors="ignore")[:200]
-            )
+            closer_client, closer_up = client, upstream
 
-        # 记住跟跳后的公网终链，后续 Range/快进直打 CDN
+            async def _active_close() -> None:
+                await _shutdown(closer_client, closer_up)
+
+            _play_active_closers[movie_id] = _active_close
+
+        # 记住终链仅作诊断；实际每次仍优先走网关（避免并发 CDN pmt）
         try:
             final_u = str(upstream.url)
         except Exception:
@@ -1125,7 +1168,6 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         out_headers: dict[str, str] = {
             "Access-Control-Allow-Origin": "*",
             "Accept-Ranges": "bytes",
-            # 禁止中间层把整段视频缓存成不可 Range 的实体
             "Cache-Control": "no-store",
         }
         ctype = upstream.headers.get("content-type") or "application/octet-stream"
@@ -1140,17 +1182,24 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 out_headers[dest] = val
 
         if request.method == "HEAD":
-            await upstream.aclose()
-            await client.aclose()
+            await _shutdown(client, upstream)
+            if _play_active_closers.get(movie_id) is _active_close:
+                _play_active_closers.pop(movie_id, None)
             return Response(status_code=upstream.status_code, headers=out_headers)
 
         async def body_iter():
             try:
                 async for chunk in upstream.aiter_bytes(chunk_size=64 * 1024):
                     yield chunk
+            except (asyncio.CancelledError, GeneratorExit):
+                raise
+            except Exception:
+                # 快进时上一路被主动关掉，或客户端断开：不要把 StreamClosed 打成 500
+                return
             finally:
-                await upstream.aclose()
-                await client.aclose()
+                if _play_active_closers.get(movie_id) is _active_close:
+                    _play_active_closers.pop(movie_id, None)
+                await _shutdown(client, upstream)
 
         return StreamingResponse(
             body_iter(),
