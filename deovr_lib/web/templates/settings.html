@@ -26,10 +26,9 @@
   <section class="settings-panel">
     <h2 class="settings-h2">① 115 本地播放 / 网关</h2>
     <p class="hint">
-      STRM 里常见 <code>http://127.0.0.1:12366/play115/…</code>。远程设备打不开本机回环地址时，
-      把主机改写成<strong>实际跑 115 网关的那台机器</strong>的局域网 IP（可带端口）。<br />
-      例：<code>192.168.0.40</code> 或 <code>192.168.0.40:12366</code>。<br />
-      <code>/play</code> 代理会优先连本机，失败再试该地址，再尝试解析 CDN。
+      STRM 里常见 <code>http://127.0.0.1:12366/play115/…</code>，但不少设备<strong>代理口是 11500</strong>（与 STRM 端口可能不同）。
+      请把「网关指向」填成<strong>实际跑 115 的那台机器</strong>：<code>IP:11500</code>。<br />
+      例：<code>192.168.0.40:11500</code>。<code>/play</code> 会优先 CDN，过期后再试该网关（并自动试 11500/12366）。
     </p>
 
     <div class="gateway-settings" id="gateway-settings">
@@ -41,7 +40,7 @@
       <div class="gateway-row">
         <label class="gateway-label">115 网关指向
           <input id="rewrite_to" type="text" value="{{ rewrite_to }}"
-                 placeholder="192.168.0.40 或 192.168.0.40:12366" autocomplete="off" />
+                 placeholder="192.168.0.40:11500" autocomplete="off" />
         </label>
         <button class="btn ghost" type="button" id="btn-detect-ip">检测本机 IP</button>
         <span id="detect-hint" class="hint">{% if detected_ip %}检测: {{ detected_ip }}{% endif %}</span>
@@ -178,15 +177,16 @@
         const res = await fetch("/api/settings/detect-ip");
         const data = await res.json();
         if (data.ip) {
-          // 保留已有端口；否则建议 :12366
+          // 保留已有端口；否则建议 :11500（设备代理口，常与 STRM 的 12366 不同）
           const cur = input.value.trim();
-          let port = "12366";
+          let port = "11500";
+          if (data.default_port) port = String(data.default_port);
           if (cur.includes(":") && !cur.startsWith("[")) {
             const p = cur.split(":").pop();
             if (/^\d+$/.test(p)) port = p;
           }
           input.value = `${data.ip}:${port}`;
-          hint.textContent = `已填入本机 IP ${data.ip}（请确认 115 网关在此机器）`;
+          hint.textContent = `已填入 ${data.ip}:${port}（请确认 115 代理口，常见 11500）`;
         } else {
           hint.textContent = "未能检测到局域网 IP";
         }

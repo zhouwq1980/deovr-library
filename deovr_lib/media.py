@@ -12,6 +12,8 @@ _play_upstream: dict[int, tuple[str, float]] = {}
 _lock = Lock()
 DEFAULT_TTL = 300  # CDN 链接缓存 5 分钟
 PLAY_UPSTREAM_TTL = 180  # 播放会话内 CDN 复用约 3 分钟
+# STRM 常写 12366；不少 115 设备/代理实际监听 11500
+COMMON_115_GATEWAY_PORTS = (11500, 12366)
 
 # 回环地址；局域网私网段会自动识别，无需再配 rewrite_from
 DEFAULT_REWRITE_FROM = ("127.0.0.1", "localhost", "::1", "0.0.0.0")
@@ -117,7 +119,7 @@ def rewrite_loopback(
 ) -> str:
     """把 STRM 里的本机/局域网主机改成 rewrite_to（公网地址不改）。
 
-    rewrite_to 可为 ``192.168.0.40`` 或 ``192.168.0.40:12366``（带端口则覆盖原端口）。
+    rewrite_to 可为 ``192.168.0.40`` 或 ``192.168.0.40:11500``（带端口则覆盖原端口）。
     """
     if not url or not lan_host:
         return url
@@ -134,6 +136,55 @@ def rewrite_loopback(
     else:
         netloc = target_host
     return urlunparse(p._replace(netloc=netloc))
+
+
+def replace_url_host_port(url: str, host: str, port: int | None) -> str:
+    """只替换 URL 的主机/端口，保留 path/query。"""
+    if not url or not host:
+        return url
+    p = urlparse(url)
+    if port:
+        netloc = f"{host}:{int(port)}"
+    else:
+        netloc = host
+    return urlunparse(p._replace(netloc=netloc))
+
+
+def gateway_url_variants(
+    url: str,
+    lan_host: str,
+    rewrite_from: object | None = None,
+) -> list[str]:
+    """115 网关候选：rewrite_to（含端口）优先，再试常见端口 11500/12366。
+
+    STRM 里常写 ``127.0.0.1:12366``，但设备代理口可能是 ``11500``；
+    CDN 过期回退网关时若只打错端口会直接 502。
+    """
+    if not url or not lan_host:
+        return []
+    p = urlparse(url)
+    raw_host = (p.hostname or "").lower()
+    if not should_rewrite_host(raw_host, lan_host, rewrite_from=rewrite_from):
+        return []
+    target_host, target_port = parse_rewrite_target(lan_host)
+    if not target_host:
+        return []
+
+    ports: list[int] = []
+    if target_port is not None:
+        ports.append(int(target_port))
+    if p.port:
+        ports.append(int(p.port))
+    ports.extend(COMMON_115_GATEWAY_PORTS)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for port in ports:
+        u = replace_url_host_port(url, target_host, port)
+        if u and u not in seen and u != url:
+            seen.add(u)
+            out.append(u)
+    return out
 
 
 def _follow_once(url: str, timeout: float = 10.0) -> tuple[str, int | None]:

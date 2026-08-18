@@ -16,6 +16,7 @@ from .config import DEFAULT_CONFIG, load_config, save_config
 from .db import Database
 from .media import (
     clear_play_upstream,
+    gateway_url_variants,
     get_play_upstream,
     is_private_or_loopback_host,
     is_public_https_url,
@@ -659,7 +660,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
     @app.get("/api/settings/detect-ip")
     async def api_detect_ip():
         ip = _detect_lan_ip() or ""
-        return {"ip": ip, "suggest": f"{ip}:12366" if ip else ""}
+        return {"ip": ip, "suggest": f"{ip}:11500" if ip else "", "default_port": 11500}
 
     @app.post("/api/settings/media")
     async def api_save_media_settings(request: Request):
@@ -988,36 +989,52 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 await client.aclose()
                 raise
 
-        def _cdn_url() -> str:
-            cached = get_play_upstream(movie_id)
-            if cached:
-                return cached
-            for cand in (client_url,):
-                if is_public_https_url(cand):
-                    return cand
-            try:
-                resolved = resolve_media_url(
-                    raw,
-                    lan_host="",
-                    ttl=int(cfg_l.get("media_url_cache_ttl") or 300),
+        def _cdn_url(*, force: bool = False) -> str:
+            """拿到公网 CDN；本机 STRM 端口不对时，改从 rewrite_to 网关跟跳。"""
+            if not force:
+                cached = get_play_upstream(movie_id)
+                if cached:
+                    return cached
+                if is_public_https_url(client_url):
+                    return client_url
+            ttl = int(cfg_l.get("media_url_cache_ttl") or 300)
+            starts: list[str] = []
+            target = rewrite_target(request)
+            if target:
+                starts.extend(
+                    gateway_url_variants(
+                        raw, target, rewrite_from=cfg_l.get("rewrite_from")
+                    )
                 )
-            except Exception:
-                resolved = ""
-            if is_public_https_url(resolved):
-                return resolved
+            starts.append(raw)
+            seen_s: set[str] = set()
+            for start in starts:
+                if not start or start in seen_s:
+                    continue
+                seen_s.add(start)
+                try:
+                    resolved = resolve_media_url(
+                        start,
+                        lan_host="",
+                        ttl=ttl,
+                        use_cache=not force,
+                    )
+                except Exception:
+                    continue
+                if is_public_https_url(resolved):
+                    return resolved
             return ""
 
-        def _lan_gateway_url() -> str:
-            """rewrite_to 上的同路径网关（115 跑在另一台局域网机器）。"""
+        def _lan_gateway_urls() -> list[str]:
+            """rewrite_to 主机 + 配置端口 / 11500 / 12366 / STRM 端口。"""
             target = rewrite_target(request)
             if not target or not is_private_or_loopback_host(raw_host):
-                return ""
-            alt = rewrite_loopback(raw, target, rewrite_from=cfg_l.get("rewrite_from"))
-            if alt and alt != raw and is_http_url(alt):
-                return alt
-            return ""
+                return []
+            return gateway_url_variants(
+                raw, target, rewrite_from=cfg_l.get("rewrite_from")
+            )
 
-        # 候选顺序：CDN → LAN 网关 → 本机网关（公网 STRM 只打 client_url）
+        # 候选顺序：CDN → LAN 网关(多端口) → 本机网关（公网 STRM 只打 client_url）
         candidates: list[tuple[str, str]] = []
         seen: set[str] = set()
 
@@ -1030,7 +1047,8 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
 
         if is_private_or_loopback_host(raw_host):
             _add(_cdn_url(), light_ua)
-            _add(_lan_gateway_url(), browser_ua)
+            for gw in _lan_gateway_urls():
+                _add(gw, browser_ua)
             _add(raw, browser_ua)
         else:
             _add(client_url if is_http_url(client_url) else raw, light_ua)
@@ -1042,6 +1060,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         client = upstream = None  # type: ignore
         last_status = 0
         used_fetch = ""
+        tried_fresh_cdn = False
         for fetch_url, ua in candidates:
             headers = {**upstream_headers, "User-Agent": ua}
             try:
@@ -1067,14 +1086,47 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             await upstream.aclose()
             await client.aclose()
             client = upstream = None
+            # CDN 签名过期：强制经网关重解析一次，插到队列前面继续试
+            if (
+                not tried_fresh_cdn
+                and is_public_https_url(fetch_url)
+                and last_status in (401, 403, 404)
+            ):
+                tried_fresh_cdn = True
+                fresh = _cdn_url(force=True)
+                if fresh and fresh not in seen:
+                    # 插到下一轮：把 fresh 放进 candidates 剩余部分开头
+                    rest = [(fresh, light_ua)]
+                    # 已在循环中，直接把剩余候选前置不好改；这里同步再试一次
+                    try:
+                        client, upstream = await _open_upstream(
+                            fresh, {**upstream_headers, "User-Agent": light_ua}
+                        )
+                        if upstream.status_code < 400:
+                            gateway_err = None
+                            used_fetch = fresh
+                            seen.add(fresh)
+                            break
+                        try:
+                            await upstream.aread()
+                        except Exception:
+                            pass
+                        await upstream.aclose()
+                        await client.aclose()
+                        client = upstream = None
+                    except Exception as e:
+                        gateway_err = e
+                        client = upstream = None
 
         if upstream is None or client is None:
             port = urlparse(raw).port or 80
+            rw = rewrite_target(request) or "(未配置)"
             if is_private_or_loopback_host(raw_host):
                 raise HTTPException(
                     502,
                     f"无法连接 115 播放网关/CDN（Connection refused / HTTP {last_status or 'n/a'}）。"
-                    f"STRM={raw_host}:{port}。请确认网关已启动，或在设置里改 rewrite_to。"
+                    f"STRM={raw_host}:{port}，rewrite_to={rw}。"
+                    f"请确认设备代理口（常见 11500，不是 STRM 里的 12366）并在设置里填写 IP:端口。"
                     + (f" 详情: {gateway_err}" if gateway_err else ""),
                 )
             raise HTTPException(502, f"上游媒体不可用: {gateway_err}")
