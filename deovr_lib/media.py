@@ -7,8 +7,11 @@ from threading import Lock
 from urllib.parse import urljoin, urlparse, urlunparse
 
 _cache: dict[str, tuple[str, float]] = {}
+# /play 代理：记住某片最近可用的公网 CDN 终链，避免每次 Range/快进都重走 115 网关跳转
+_play_upstream: dict[int, tuple[str, float]] = {}
 _lock = Lock()
 DEFAULT_TTL = 300  # CDN 链接缓存 5 分钟
+PLAY_UPSTREAM_TTL = 180  # 播放会话内 CDN 复用约 3 分钟
 
 # 回环地址；局域网私网段会自动识别，无需再配 rewrite_from
 DEFAULT_REWRITE_FROM = ("127.0.0.1", "localhost", "::1", "0.0.0.0")
@@ -159,6 +162,31 @@ def is_public_https_url(url: str) -> bool:
         return False
     host = (p.hostname or "").lower()
     return bool(host) and not is_private_or_loopback_host(host)
+
+
+def get_play_upstream(movie_id: int) -> str:
+    """取出 /play 会话缓存的公网上游（未命中或过期返回空）。"""
+    now = time.time()
+    with _lock:
+        hit = _play_upstream.get(int(movie_id))
+        if hit and hit[1] > now and is_public_https_url(hit[0]):
+            return hit[0]
+        if hit:
+            _play_upstream.pop(int(movie_id), None)
+    return ""
+
+
+def set_play_upstream(movie_id: int, url: str, ttl: int = PLAY_UPSTREAM_TTL) -> None:
+    """缓存 /play 跟跳后的公网 CDN，供后续 Range 直打，减轻快进卡顿。"""
+    if not is_public_https_url(url):
+        return
+    with _lock:
+        _play_upstream[int(movie_id)] = (url, time.time() + max(30, ttl))
+
+
+def clear_play_upstream(movie_id: int) -> None:
+    with _lock:
+        _play_upstream.pop(int(movie_id), None)
 
 
 def resolve_media_url(

@@ -15,12 +15,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .config import DEFAULT_CONFIG, load_config, save_config
 from .db import Database
 from .media import (
+    clear_play_upstream,
+    get_play_upstream,
     is_private_or_loopback_host,
     is_public_https_url,
     normalize_rewrite_from,
     parse_rewrite_target,
     resolve_media_url,
     rewrite_loopback,
+    set_play_upstream,
 )
 from .nfo import is_http_url, media_content_type, read_strm
 from .players import (
@@ -946,25 +949,18 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         except ImportError:
             return RedirectResponse(url=client_url, status_code=302)
 
-        # 代理上游：
-        # - STRM 是 127.0.0.1/私网 115 网关 → 优先跟原始地址（本机可访问）
-        # - 网关失败时回退公网 CDN（轻量 UA；Chrome UA 直打 CDN 常 403）
-        # - 已是公网 CDN → 用轻量 UA
+        # 代理上游（快进 = 新 Range 请求）：
+        # - 优先复用已解析/会话缓存的公网 CDN（轻量 UA），避免每次都走 115 网关跳转
+        # - CDN 403/失败再回退 LAN 网关 → 本机 127.0.0.1 网关
+        # - Chrome UA 直打 CDN 常 403；网关用浏览器 UA，CDN 用轻量 UA
         raw_host = (urlparse(raw).hostname or "").lower()
         light_ua = "DeoVR-Library/1.0"
         browser_ua = (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        if is_private_or_loopback_host(raw_host):
-            upstream_url = raw
-            upstream_ua = browser_ua
-        else:
-            upstream_url = client_url
-            upstream_ua = light_ua
 
         upstream_headers = {
-            "User-Agent": upstream_ua,
             "Accept": "*/*",
         }
         range_h = request.headers.get("range") or request.headers.get("Range")
@@ -972,9 +968,10 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             upstream_headers["Range"] = range_h
 
         async def _open_upstream(fetch_url: str, headers: dict[str, str]):
+            # 连接超时缩短：死掉的 127.0.0.1 不要拖死每一次快进
             client = httpx.AsyncClient(
                 follow_redirects=True,
-                timeout=httpx.Timeout(60.0, connect=10.0),
+                timeout=httpx.Timeout(60.0, connect=3.0),
                 trust_env=False,
             )
             try:
@@ -991,8 +988,10 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 await client.aclose()
                 raise
 
-        def _cdn_fallback_url() -> str:
-            """网关挂掉时尽量拿到 https CDN。"""
+        def _cdn_url() -> str:
+            cached = get_play_upstream(movie_id)
+            if cached:
+                return cached
             for cand in (client_url,):
                 if is_public_https_url(cand):
                     return cand
@@ -1009,7 +1008,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             return ""
 
         def _lan_gateway_url() -> str:
-            """127.0.0.1 失败时，试 rewrite_to 上的同路径网关（115 跑在另一台局域网机器）。"""
+            """rewrite_to 上的同路径网关（115 跑在另一台局域网机器）。"""
             target = rewrite_target(request)
             if not target or not is_private_or_loopback_host(raw_host):
                 return ""
@@ -1018,15 +1017,31 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 return alt
             return ""
 
-        candidates: list[tuple[str, str]] = [(upstream_url, upstream_ua)]
+        # 候选顺序：CDN → LAN 网关 → 本机网关（公网 STRM 只打 client_url）
+        candidates: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def _add(url: str, ua: str) -> None:
+            u = (url or "").strip()
+            if not u or u in seen:
+                return
+            seen.add(u)
+            candidates.append((u, ua))
+
         if is_private_or_loopback_host(raw_host):
-            lan_gw = _lan_gateway_url()
-            if lan_gw:
-                candidates.append((lan_gw, browser_ua))
+            _add(_cdn_url(), light_ua)
+            _add(_lan_gateway_url(), browser_ua)
+            _add(raw, browser_ua)
+        else:
+            _add(client_url if is_http_url(client_url) else raw, light_ua)
+
+        if not candidates:
+            raise HTTPException(502, "无可用上游播放地址")
 
         gateway_err: Exception | None = None
         client = upstream = None  # type: ignore
         last_status = 0
+        used_fetch = ""
         for fetch_url, ua in candidates:
             headers = {**upstream_headers, "User-Agent": ua}
             try:
@@ -1034,12 +1049,17 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             except Exception as e:
                 gateway_err = e
                 client = upstream = None
+                if is_public_https_url(fetch_url):
+                    clear_play_upstream(movie_id)
                 continue
             if upstream.status_code < 400:
                 gateway_err = None
+                used_fetch = fetch_url
                 break
             last_status = upstream.status_code
             gateway_err = Exception(f"HTTP {upstream.status_code} from {fetch_url[:80]}")
+            if is_public_https_url(fetch_url) or upstream.status_code in (401, 403, 404):
+                clear_play_upstream(movie_id)
             try:
                 await upstream.aread()
             except Exception:
@@ -1048,44 +1068,39 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             await client.aclose()
             client = upstream = None
 
-        # 本机/私网网关均失败 → 回退 CDN
-        need_cdn = is_private_or_loopback_host(raw_host) and upstream is None
-        if need_cdn:
-            cdn = _cdn_fallback_url()
-            if cdn:
-                try:
-                    client, upstream = await _open_upstream(
-                        cdn, {**upstream_headers, "User-Agent": light_ua}
-                    )
-                    gateway_err = None
-                except Exception as e:
-                    raise HTTPException(
-                        502,
-                        f"115 网关不可用，且 CDN 回退失败: {e}",
-                    ) from e
-            else:
-                port = urlparse(raw).port or 80
+        if upstream is None or client is None:
+            port = urlparse(raw).port or 80
+            if is_private_or_loopback_host(raw_host):
                 raise HTTPException(
                     502,
-                    f"无法连接 115 播放网关 {raw_host}:{port}（Connection refused / HTTP {last_status or 'n/a'}）。"
-                    f"请在运行片库的电脑上启动 115 本地播放/网关；浏览器 CDN 直链不经过 /play。"
+                    f"无法连接 115 播放网关/CDN（Connection refused / HTTP {last_status or 'n/a'}）。"
+                    f"STRM={raw_host}:{port}。请确认网关已启动，或在设置里改 rewrite_to。"
                     + (f" 详情: {gateway_err}" if gateway_err else ""),
                 )
-
-        if upstream is None or client is None:
             raise HTTPException(502, f"上游媒体不可用: {gateway_err}")
 
         if upstream.status_code >= 400:
             body = await upstream.aread()
             await upstream.aclose()
             await client.aclose()
+            clear_play_upstream(movie_id)
             raise HTTPException(
                 upstream.status_code, body.decode("utf-8", errors="ignore")[:200]
             )
 
+        # 记住跟跳后的公网终链，后续 Range/快进直打 CDN
+        try:
+            final_u = str(upstream.url)
+        except Exception:
+            final_u = used_fetch
+        if is_public_https_url(final_u):
+            set_play_upstream(movie_id, final_u)
+
         out_headers: dict[str, str] = {
             "Access-Control-Allow-Origin": "*",
             "Accept-Ranges": "bytes",
+            # 禁止中间层把整段视频缓存成不可 Range 的实体
+            "Cache-Control": "no-store",
         }
         ctype = upstream.headers.get("content-type") or "application/octet-stream"
         out_headers["Content-Type"] = ctype
