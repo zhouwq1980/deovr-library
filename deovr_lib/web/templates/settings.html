@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>外接播放器设置</title>
+  <title>设置 · DeoVR Library</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <header class="top">
     <div class="brand">
       <a class="back" href="/browse">← 返回片库</a>
-      <h1>外接播放器</h1>
-      <p class="sub">配置 VLC / IINA 等；详情页一点即可唤起播放</p>
+      <h1>设置</h1>
+      <p class="sub">115 网关改写 · 外接播放器</p>
     </div>
     <div class="actions">
       <a class="btn ghost" href="/browse">片库</a>
-      <button class="btn" id="btn-save" type="button">保存</button>
+      <button class="btn" id="btn-save-all" type="button">全部保存</button>
     </div>
   </header>
 
@@ -24,9 +24,56 @@
   {% endif %}
 
   <section class="settings-panel">
+    <h2 class="settings-h2">① 115 本地播放 / 网关</h2>
     <p class="hint">
-      <strong>scheme</strong>：浏览器本机唤起（如 <code>vlc://{url}</code>、<code>iina://weblink?url={url_encoded}</code>）。<br />
-      <strong>path</strong>：运行本服务的电脑上的应用路径；详情里「本机启动」会在服务器上打开。<br />
+      STRM 里常见 <code>http://127.0.0.1:12366/play115/…</code>。远程设备打不开本机回环地址时，
+      把主机改写成<strong>实际跑 115 网关的那台机器</strong>的局域网 IP（可带端口）。<br />
+      例：<code>192.168.0.40</code> 或 <code>192.168.0.40:12366</code>。<br />
+      <code>/play</code> 代理会优先连本机，失败再试该地址，再尝试解析 CDN。
+    </p>
+
+    <div class="gateway-settings" id="gateway-settings">
+      <label class="check-row">
+        <input type="checkbox" id="rewrite_enabled" {% if rewrite_enabled %}checked{% endif %} />
+        启用改写（127.0.0.1 / 私网 → 下面地址）
+      </label>
+
+      <div class="gateway-row">
+        <label class="gateway-label">115 网关指向
+          <input id="rewrite_to" type="text" value="{{ rewrite_to }}"
+                 placeholder="192.168.0.40 或 192.168.0.40:12366" autocomplete="off" />
+        </label>
+        <button class="btn ghost" type="button" id="btn-detect-ip">检测本机 IP</button>
+        <span id="detect-hint" class="hint">{% if detected_ip %}检测: {{ detected_ip }}{% endif %}</span>
+      </div>
+
+      <label class="check-row">
+        <input type="checkbox" id="auto_resolve" {% if auto_resolve %}checked{% endif %} />
+        私网 STRM 自动解析 CDN 直链（推荐）
+      </label>
+      <label class="check-row">
+        <input type="checkbox" id="resolve_cdn" {% if resolve_cdn %}checked{% endif %} />
+        始终解析跳转
+      </label>
+      <label class="check-row">
+        <input type="checkbox" id="use_play_url" {% if use_play_url %}checked{% endif %} />
+        DeoVR 经本服务 /play 播放（推荐）
+      </label>
+      <label class="check-row">
+        <input type="checkbox" id="proxy_strm" {% if proxy_strm %}checked{% endif %} />
+        代理 STRM 流到头显（推荐）
+      </label>
+    </div>
+
+    <div class="settings-actions">
+      <button class="btn" id="btn-save-gateway" type="button">保存网关设置</button>
+      <span id="gateway-msg" class="hint"></span>
+    </div>
+
+    <h2 class="settings-h2">② 外接播放器</h2>
+    <p class="hint">
+      <strong>scheme</strong>：浏览器本机唤起（如 <code>vlc://{url}</code>）。<br />
+      <strong>path</strong>：运行本服务电脑上的应用路径；详情「本机启动」在服务器打开。<br />
       播放地址统一用 <code>{{ base }}/play/&#123;id&#125;</code>。
     </p>
 
@@ -52,13 +99,13 @@
     </div>
 
     <div class="settings-actions">
-      <button class="btn" id="btn-save-2" type="button">保存设置</button>
-      <span id="save-msg" class="hint"></span>
+      <button class="btn" id="btn-save-players" type="button">保存播放器</button>
+      <span id="players-msg" class="hint"></span>
     </div>
   </section>
 
   <script>
-    function collect() {
+    function collectPlayers() {
       return [...document.querySelectorAll(".player-row")].map((row) => ({
         id: row.dataset.id,
         enabled: row.querySelector(".p-enabled").checked,
@@ -67,25 +114,90 @@
         path: row.querySelector(".p-path").value.trim(),
       }));
     }
-    async function save() {
-      const msg = document.getElementById("save-msg");
+
+    function collectGateway() {
+      return {
+        rewrite_localhost_enabled: document.getElementById("rewrite_enabled").checked,
+        rewrite_to: document.getElementById("rewrite_to").value.trim(),
+        auto_resolve_private_strm: document.getElementById("auto_resolve").checked,
+        resolve_strm_redirects: document.getElementById("resolve_cdn").checked,
+        deovr_use_play_url: document.getElementById("use_play_url").checked,
+        proxy_strm: document.getElementById("proxy_strm").checked,
+      };
+    }
+
+    async function saveGateway() {
+      const msg = document.getElementById("gateway-msg");
       msg.textContent = "保存中…";
       try {
-        const res = await fetch("/api/settings/players", {
+        const res = await fetch("/api/settings/media", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ players: collect() }),
+          body: JSON.stringify(collectGateway()),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "保存失败");
-        msg.textContent = "已保存";
+        if (data.rewrite_to != null) {
+          document.getElementById("rewrite_to").value = data.rewrite_to;
+        }
+        msg.textContent = "网关设置已保存（立即生效）";
         history.replaceState(null, "", "/settings?saved=1");
       } catch (e) {
         msg.textContent = String(e.message || e);
       }
     }
-    document.getElementById("btn-save").addEventListener("click", save);
-    document.getElementById("btn-save-2").addEventListener("click", save);
+
+    async function savePlayers() {
+      const msg = document.getElementById("players-msg");
+      msg.textContent = "保存中…";
+      try {
+        const res = await fetch("/api/settings/players", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ players: collectPlayers() }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "保存失败");
+        msg.textContent = "播放器已保存";
+        history.replaceState(null, "", "/settings?saved=1");
+      } catch (e) {
+        msg.textContent = String(e.message || e);
+      }
+    }
+
+    async function saveAll() {
+      await saveGateway();
+      await savePlayers();
+    }
+
+    document.getElementById("btn-detect-ip").addEventListener("click", async () => {
+      const hint = document.getElementById("detect-hint");
+      const input = document.getElementById("rewrite_to");
+      hint.textContent = "检测中…";
+      try {
+        const res = await fetch("/api/settings/detect-ip");
+        const data = await res.json();
+        if (data.ip) {
+          // 保留已有端口；否则建议 :12366
+          const cur = input.value.trim();
+          let port = "12366";
+          if (cur.includes(":") && !cur.startsWith("[")) {
+            const p = cur.split(":").pop();
+            if (/^\d+$/.test(p)) port = p;
+          }
+          input.value = `${data.ip}:${port}`;
+          hint.textContent = `已填入本机 IP ${data.ip}（请确认 115 网关在此机器）`;
+        } else {
+          hint.textContent = "未能检测到局域网 IP";
+        }
+      } catch (e) {
+        hint.textContent = String(e.message || e);
+      }
+    });
+
+    document.getElementById("btn-save-gateway").addEventListener("click", saveGateway);
+    document.getElementById("btn-save-players").addEventListener("click", savePlayers);
+    document.getElementById("btn-save-all").addEventListener("click", saveAll);
   </script>
 </body>
 </html>

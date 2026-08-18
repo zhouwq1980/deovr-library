@@ -67,6 +67,29 @@ def is_private_or_loopback_host(host: str) -> bool:
     return _is_loopback_host(h) or _is_private_ip(h)
 
 
+def parse_rewrite_target(lan_host: str) -> tuple[str, int | None]:
+    """解析 rewrite_to：支持 IP、host:port、http://host:port。"""
+    s = (lan_host or "").strip()
+    if not s:
+        return "", None
+    if "://" in s:
+        p = urlparse(s)
+        host = (p.hostname or "").strip()
+        return host, p.port
+    # IPv6 in brackets
+    if s.startswith("["):
+        p = urlparse(f"http://{s}")
+        return (p.hostname or "").strip(), p.port
+    if s.count(":") == 1:
+        host, _, port_s = s.partition(":")
+        host = host.strip()
+        try:
+            return host, int(port_s.strip())
+        except ValueError:
+            return s, None
+    return s, None
+
+
 def should_rewrite_host(
     host: str,
     lan_host: str,
@@ -74,7 +97,8 @@ def should_rewrite_host(
 ) -> bool:
     """默认：回环 + 私网 IP 都改写到 rewrite_to；公网 CDN 不改。"""
     h = (host or "").lower()
-    target = (lan_host or "").strip().lower()
+    target_host, _ = parse_rewrite_target(lan_host)
+    target = (target_host or "").strip().lower()
     if not h or not target or h == target:
         return False
     if _is_loopback_host(h) or _is_private_ip(h):
@@ -88,16 +112,24 @@ def rewrite_loopback(
     lan_host: str,
     rewrite_from: object | None = None,
 ) -> str:
-    """把 STRM 里的本机/局域网主机改成 rewrite_to（公网地址不改）。"""
+    """把 STRM 里的本机/局域网主机改成 rewrite_to（公网地址不改）。
+
+    rewrite_to 可为 ``192.168.0.40`` 或 ``192.168.0.40:12366``（带端口则覆盖原端口）。
+    """
     if not url or not lan_host:
         return url
     p = urlparse(url)
     host = (p.hostname or "").lower()
-    if not should_rewrite_host(host, lan_host, rewrite_from=rewrite_from):
+    target_host, target_port = parse_rewrite_target(lan_host)
+    if not target_host:
         return url
-    netloc = lan_host.strip()
-    if p.port:
-        netloc = f"{netloc}:{p.port}"
+    if not should_rewrite_host(host, target_host, rewrite_from=rewrite_from):
+        return url
+    port = target_port if target_port is not None else p.port
+    if port:
+        netloc = f"{target_host}:{port}"
+    else:
+        netloc = target_host
     return urlunparse(p._replace(netloc=netloc))
 
 
@@ -115,6 +147,18 @@ def _follow_once(url: str, timeout: float = 10.0) -> tuple[str, int | None]:
         if e.code in (301, 302, 303, 307, 308) and loc:
             return urljoin(url, loc), e.code
         raise
+
+
+def is_public_https_url(url: str) -> bool:
+    """公网 https（CDN 直链），非本机/私网网关。"""
+    try:
+        p = urlparse(url or "")
+    except Exception:
+        return False
+    if (p.scheme or "").lower() != "https":
+        return False
+    host = (p.hostname or "").lower()
+    return bool(host) and not is_private_or_loopback_host(host)
 
 
 def resolve_media_url(
@@ -144,6 +188,7 @@ def resolve_media_url(
 
     current = url
     final = url
+    reached_public = False
     try:
         for _ in range(6):
             # 本机解析时用 127.0.0.1 更稳；中间跳转若仍是 loopback 保持本机访问
@@ -169,8 +214,9 @@ def resolve_media_url(
                     break
 
             final = nxt
-            # 已到 https CDN / 非本服务跳转终点
             host = (urlparse(nxt).hostname or "").lower()
+            if is_public_https_url(nxt):
+                reached_public = True
             if code and code < 300:
                 break
             if host not in ("127.0.0.1", "localhost", "::1") and urlparse(nxt).scheme == "https":
@@ -179,6 +225,8 @@ def resolve_media_url(
                 try:
                     nxt2, code2 = _follow_once(current)
                     final = nxt2
+                    if is_public_https_url(nxt2):
+                        reached_public = True
                     if code2 and code2 < 300:
                         break
                     if nxt2 == current:
@@ -193,10 +241,12 @@ def resolve_media_url(
     except Exception:
         final = url
 
-    if lan_host:
+    # 仅当仍落在私网/回环时才改写到局域网 IP；已到 CDN 不要改
+    if lan_host and not is_public_https_url(final):
         final = rewrite_loopback(final, lan_host, rewrite_from=rewrite_from)
 
-    if use_cache and final:
+    # 未解析到公网 CDN 时不缓存，避免网关短暂 502 后长期命中坏链
+    if use_cache and final and reached_public:
         with _lock:
             _cache[cache_key] = (final, now + max(30, ttl))
     return final

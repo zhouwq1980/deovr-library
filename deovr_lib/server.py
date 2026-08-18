@@ -16,7 +16,9 @@ from .config import DEFAULT_CONFIG, load_config, save_config
 from .db import Database
 from .media import (
     is_private_or_loopback_host,
+    is_public_https_url,
     normalize_rewrite_from,
+    parse_rewrite_target,
     resolve_media_url,
     rewrite_loopback,
 )
@@ -113,8 +115,10 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 or str(cfg_l.get("lan_host") or "").strip()
                 or _detect_lan_ip()
             )
-            if lan:
-                return f"{proto}://{lan}:{port}"
+            # rewrite_to 可能是 115 网关 host:port，片库根地址只用主机名 + 本服务端口
+            host_only, _ = parse_rewrite_target(lan) if lan else ("", None)
+            if host_only:
+                return f"{proto}://{host_only}:{port}"
 
         if host_hdr:
             name = host_hdr.split(":")[0].lower()
@@ -616,12 +620,87 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             app.state.cfg = cfg_l
         except Exception:
             cfg_l = app.state.cfg
+        detected = _detect_lan_ip()
         return _render(
             "settings.html",
             base=base_url(request),
             players=merge_external_players(cfg_l.get("external_players")),
             saved=request.query_params.get("saved") == "1",
+            rewrite_enabled=bool(cfg_l.get("rewrite_localhost_enabled", True)),
+            rewrite_to=str(cfg_l.get("rewrite_to") or cfg_l.get("lan_host") or ""),
+            auto_resolve=bool(cfg_l.get("auto_resolve_private_strm", True)),
+            resolve_cdn=bool(cfg_l.get("resolve_strm_redirects", False)),
+            proxy_strm=bool(cfg_l.get("proxy_strm", True)),
+            use_play_url=bool(cfg_l.get("deovr_use_play_url", True)),
+            detected_ip=detected or "",
         )
+
+    @app.get("/api/settings")
+    async def api_get_settings():
+        try:
+            cfg_l = load_config()
+            app.state.cfg = cfg_l
+        except Exception:
+            cfg_l = app.state.cfg
+        detected = _detect_lan_ip()
+        return {
+            "rewrite_localhost_enabled": bool(cfg_l.get("rewrite_localhost_enabled", True)),
+            "rewrite_to": str(cfg_l.get("rewrite_to") or cfg_l.get("lan_host") or ""),
+            "auto_resolve_private_strm": bool(cfg_l.get("auto_resolve_private_strm", True)),
+            "resolve_strm_redirects": bool(cfg_l.get("resolve_strm_redirects", False)),
+            "proxy_strm": bool(cfg_l.get("proxy_strm", True)),
+            "deovr_use_play_url": bool(cfg_l.get("deovr_use_play_url", True)),
+            "detected_ip": detected or "",
+        }
+
+    @app.get("/api/settings/detect-ip")
+    async def api_detect_ip():
+        ip = _detect_lan_ip() or ""
+        return {"ip": ip, "suggest": f"{ip}:12366" if ip else ""}
+
+    @app.post("/api/settings/media")
+    async def api_save_media_settings(request: Request):
+        """保存 115 网关 / STRM 改写与播放相关设置。"""
+        try:
+            body = await request.json()
+        except Exception as e:
+            raise HTTPException(400, f"无效 JSON: {e}") from e
+        if not isinstance(body, dict):
+            raise HTTPException(400, "需要 JSON 对象")
+        try:
+            cfg_l = load_config()
+        except Exception:
+            cfg_l = dict(app.state.cfg)
+
+        if "rewrite_localhost_enabled" in body:
+            cfg_l["rewrite_localhost_enabled"] = bool(body.get("rewrite_localhost_enabled"))
+        if "rewrite_to" in body:
+            rw = str(body.get("rewrite_to") or "").strip()
+            # 去掉误填的 http://
+            if "://" in rw:
+                host, port = parse_rewrite_target(rw)
+                rw = f"{host}:{port}" if host and port else (host or rw)
+            cfg_l["rewrite_to"] = rw
+        if "auto_resolve_private_strm" in body:
+            cfg_l["auto_resolve_private_strm"] = bool(body.get("auto_resolve_private_strm"))
+        if "resolve_strm_redirects" in body:
+            cfg_l["resolve_strm_redirects"] = bool(body.get("resolve_strm_redirects"))
+        if "proxy_strm" in body:
+            cfg_l["proxy_strm"] = bool(body.get("proxy_strm"))
+        if "deovr_use_play_url" in body:
+            cfg_l["deovr_use_play_url"] = bool(body.get("deovr_use_play_url"))
+
+        save_config(cfg_l, DEFAULT_CONFIG)
+        app.state.cfg = cfg_l
+        return {
+            "ok": True,
+            "rewrite_localhost_enabled": bool(cfg_l.get("rewrite_localhost_enabled", True)),
+            "rewrite_to": str(cfg_l.get("rewrite_to") or ""),
+            "auto_resolve_private_strm": bool(cfg_l.get("auto_resolve_private_strm", True)),
+            "resolve_strm_redirects": bool(cfg_l.get("resolve_strm_redirects", False)),
+            "proxy_strm": bool(cfg_l.get("proxy_strm", True)),
+            "deovr_use_play_url": bool(cfg_l.get("deovr_use_play_url", True)),
+        }
 
     @app.post("/api/settings/players")
     async def api_save_players(request: Request):
@@ -868,19 +947,21 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             return RedirectResponse(url=client_url, status_code=302)
 
         # 代理上游：
-        # - STRM 是 127.0.0.1/私网 115 网关 → 服务端跟原始地址（本机可访问）
-        #   Chrome UA 直打 CDN 常 403 invalid signature；经网关跟随则正常
-        # - 已是公网 CDN → 用轻量 UA，避免伪装浏览器破坏签名
+        # - STRM 是 127.0.0.1/私网 115 网关 → 优先跟原始地址（本机可访问）
+        # - 网关失败时回退公网 CDN（轻量 UA；Chrome UA 直打 CDN 常 403）
+        # - 已是公网 CDN → 用轻量 UA
         raw_host = (urlparse(raw).hostname or "").lower()
+        light_ua = "DeoVR-Library/1.0"
+        browser_ua = (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         if is_private_or_loopback_host(raw_host):
             upstream_url = raw
-            upstream_ua = (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
+            upstream_ua = browser_ua
         else:
             upstream_url = client_url
-            upstream_ua = "DeoVR-Library/1.0"
+            upstream_ua = light_ua
 
         upstream_headers = {
             "User-Agent": upstream_ua,
@@ -892,7 +973,9 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
 
         async def _open_upstream(fetch_url: str, headers: dict[str, str]):
             client = httpx.AsyncClient(
-                follow_redirects=True, timeout=httpx.Timeout(60.0, connect=15.0)
+                follow_redirects=True,
+                timeout=httpx.Timeout(60.0, connect=10.0),
+                trust_env=False,
             )
             try:
                 upstream = await client.send(
@@ -908,34 +991,89 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 await client.aclose()
                 raise
 
-        try:
-            client, upstream = await _open_upstream(upstream_url, upstream_headers)
-        except Exception as e:
-            raise HTTPException(502, f"上游媒体不可用: {e}") from e
+        def _cdn_fallback_url() -> str:
+            """网关挂掉时尽量拿到 https CDN。"""
+            for cand in (client_url,):
+                if is_public_https_url(cand):
+                    return cand
+            try:
+                resolved = resolve_media_url(
+                    raw,
+                    lan_host="",
+                    ttl=int(cfg_l.get("media_url_cache_ttl") or 300),
+                )
+            except Exception:
+                resolved = ""
+            if is_public_https_url(resolved):
+                return resolved
+            return ""
 
-        # 若误走 CDN 直链 403，且原始是本机网关，回退经网关再拉
-        if (
-            upstream.status_code >= 400
-            and upstream_url != raw
-            and is_private_or_loopback_host(raw_host)
-        ):
-            await upstream.aread()
+        def _lan_gateway_url() -> str:
+            """127.0.0.1 失败时，试 rewrite_to 上的同路径网关（115 跑在另一台局域网机器）。"""
+            target = rewrite_target(request)
+            if not target or not is_private_or_loopback_host(raw_host):
+                return ""
+            alt = rewrite_loopback(raw, target, rewrite_from=cfg_l.get("rewrite_from"))
+            if alt and alt != raw and is_http_url(alt):
+                return alt
+            return ""
+
+        candidates: list[tuple[str, str]] = [(upstream_url, upstream_ua)]
+        if is_private_or_loopback_host(raw_host):
+            lan_gw = _lan_gateway_url()
+            if lan_gw:
+                candidates.append((lan_gw, browser_ua))
+
+        gateway_err: Exception | None = None
+        client = upstream = None  # type: ignore
+        last_status = 0
+        for fetch_url, ua in candidates:
+            headers = {**upstream_headers, "User-Agent": ua}
+            try:
+                client, upstream = await _open_upstream(fetch_url, headers)
+            except Exception as e:
+                gateway_err = e
+                client = upstream = None
+                continue
+            if upstream.status_code < 400:
+                gateway_err = None
+                break
+            last_status = upstream.status_code
+            gateway_err = Exception(f"HTTP {upstream.status_code} from {fetch_url[:80]}")
+            try:
+                await upstream.aread()
+            except Exception:
+                pass
             await upstream.aclose()
             await client.aclose()
-            try:
-                client, upstream = await _open_upstream(
-                    raw,
-                    {
-                        **upstream_headers,
-                        "User-Agent": (
-                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/120.0.0.0 Safari/537.36"
-                        ),
-                    },
+            client = upstream = None
+
+        # 本机/私网网关均失败 → 回退 CDN
+        need_cdn = is_private_or_loopback_host(raw_host) and upstream is None
+        if need_cdn:
+            cdn = _cdn_fallback_url()
+            if cdn:
+                try:
+                    client, upstream = await _open_upstream(
+                        cdn, {**upstream_headers, "User-Agent": light_ua}
+                    )
+                    gateway_err = None
+                except Exception as e:
+                    raise HTTPException(
+                        502,
+                        f"115 网关不可用，且 CDN 回退失败: {e}",
+                    ) from e
+            else:
+                port = urlparse(raw).port or 80
+                raise HTTPException(
+                    502,
+                    f"无法连接 115 播放网关 {raw_host}:{port}（Connection refused / HTTP {last_status or 'n/a'}）。"
+                    f"请在运行片库的电脑上启动 115 本地播放/网关；浏览器 CDN 直链不经过 /play。"
+                    + (f" 详情: {gateway_err}" if gateway_err else ""),
                 )
-            except Exception as e:
-                raise HTTPException(502, f"上游媒体不可用: {e}") from e
+
+        if upstream is None or client is None:
+            raise HTTPException(502, f"上游媒体不可用: {gateway_err}")
 
         if upstream.status_code >= 400:
             body = await upstream.aread()
