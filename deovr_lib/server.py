@@ -49,12 +49,16 @@ _jinja.filters["tojson"] = lambda v: _json.dumps(v, ensure_ascii=False)
 # 在 script 里输出 JSON 时需 |safe，避免 &#34; 转义弄坏 JS
 
 # /play 同片并发 Range（快进）会触发 115「pmt」403；按影片串行开流并关掉上一路
+# 注意：Python 3.8 禁止在无 event loop 的导入阶段创建 asyncio.Lock()
 _play_open_locks: dict[int, asyncio.Lock] = {}
-_play_lock_guard = asyncio.Lock()
+_play_lock_guard: asyncio.Lock | None = None
 _play_active_closers: dict[int, Callable[[], Awaitable[None]]] = {}
 
 
 async def _play_lock_for(movie_id: int) -> asyncio.Lock:
+    global _play_lock_guard
+    if _play_lock_guard is None:
+        _play_lock_guard = asyncio.Lock()
     async with _play_lock_guard:
         lock = _play_open_locks.get(movie_id)
         if lock is None:
