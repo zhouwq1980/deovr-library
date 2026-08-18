@@ -20,8 +20,10 @@ from .media import (
     get_play_upstream,
     is_private_or_loopback_host,
     is_public_https_url,
+    local_115_proxy_bases,
     normalize_rewrite_from,
     parse_rewrite_target,
+    play115_proxy_urls,
     resolve_media_url,
     rewrite_loopback,
     set_play_upstream,
@@ -950,16 +952,18 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         except ImportError:
             return RedirectResponse(url=client_url, status_code=302)
 
-        # 代理上游（快进 = 新 Range 请求）：
-        # - 优先复用已解析/会话缓存的公网 CDN（轻量 UA），避免每次都走 115 网关跳转
-        # - CDN 403/失败再回退 LAN 网关 → 本机 127.0.0.1 网关
-        # - Chrome UA 直打 CDN 常 403；网关用浏览器 UA，CDN 用轻量 UA
+        # 代理上游（快进 = 新 Range）：
+        # 115 CDN 直打必须用浏览器 UA（轻量 UA → invalid signature 403）。
+        # STRM 的 /play115/... 在 11500「视频代理」上是 404，需转成 /play/{pickcode}/{file}。
+        # 优先经本机 11500 跟跳（每次 Range 都稳）；CDN 缓存仅作加速且用浏览器 UA。
         raw_host = (urlparse(raw).hostname or "").lower()
-        light_ua = "DeoVR-Library/1.0"
         browser_ua = (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
+        # 115 CDN 不要用轻量 UA
+        cdn_ua = browser_ua
+        gateway_ua = browser_ua
 
         upstream_headers = {
             "Accept": "*/*",
@@ -969,7 +973,6 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             upstream_headers["Range"] = range_h
 
         async def _open_upstream(fetch_url: str, headers: dict[str, str]):
-            # 连接超时缩短：死掉的 127.0.0.1 不要拖死每一次快进
             client = httpx.AsyncClient(
                 follow_redirects=True,
                 timeout=httpx.Timeout(60.0, connect=3.0),
@@ -989,8 +992,11 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 await client.aclose()
                 raise
 
+        target = rewrite_target(request)
+        proxy_bases = local_115_proxy_bases(target)
+        proxy_play_urls = play115_proxy_urls(raw, proxy_bases)
+
         def _cdn_url(*, force: bool = False) -> str:
-            """拿到公网 CDN；本机 STRM 端口不对时，改从 rewrite_to 网关跟跳。"""
             if not force:
                 cached = get_play_upstream(movie_id)
                 if cached:
@@ -998,8 +1004,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                 if is_public_https_url(client_url):
                     return client_url
             ttl = int(cfg_l.get("media_url_cache_ttl") or 300)
-            starts: list[str] = []
-            target = rewrite_target(request)
+            starts: list[str] = list(proxy_play_urls)
             if target:
                 starts.extend(
                     gateway_url_variants(
@@ -1025,16 +1030,7 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
                     return resolved
             return ""
 
-        def _lan_gateway_urls() -> list[str]:
-            """rewrite_to 主机 + 配置端口 / 11500 / 12366 / STRM 端口。"""
-            target = rewrite_target(request)
-            if not target or not is_private_or_loopback_host(raw_host):
-                return []
-            return gateway_url_variants(
-                raw, target, rewrite_from=cfg_l.get("rewrite_from")
-            )
-
-        # 候选顺序：CDN → LAN 网关(多端口) → 本机网关（公网 STRM 只打 client_url）
+        # 候选：115视频代理 /play/pc/name（本机11500）→ CDN(浏览器UA) → 旧 play115 多端口
         candidates: list[tuple[str, str]] = []
         seen: set[str] = set()
 
@@ -1046,12 +1042,18 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             candidates.append((u, ua))
 
         if is_private_or_loopback_host(raw_host):
-            _add(_cdn_url(), light_ua)
-            for gw in _lan_gateway_urls():
-                _add(gw, browser_ua)
-            _add(raw, browser_ua)
+            for u in proxy_play_urls:
+                _add(u, gateway_ua)
+            # CDN 仅作次选：签名过期会 403，再回退代理
+            _add(_cdn_url(), cdn_ua)
+            if target:
+                for gw in gateway_url_variants(
+                    raw, target, rewrite_from=cfg_l.get("rewrite_from")
+                ):
+                    _add(gw, gateway_ua)
+            _add(raw, gateway_ua)
         else:
-            _add(client_url if is_http_url(client_url) else raw, light_ua)
+            _add(client_url if is_http_url(client_url) else raw, cdn_ua)
 
         if not candidates:
             raise HTTPException(502, "无可用上游播放地址")
@@ -1060,7 +1062,6 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
         client = upstream = None  # type: ignore
         last_status = 0
         used_fetch = ""
-        tried_fresh_cdn = False
         for fetch_url, ua in candidates:
             headers = {**upstream_headers, "User-Agent": ua}
             try:
@@ -1086,47 +1087,20 @@ def create_app(db: Database | None = None, cfg: dict[str, Any] | None = None) ->
             await upstream.aclose()
             await client.aclose()
             client = upstream = None
-            # CDN 签名过期：强制经网关重解析一次，插到队列前面继续试
-            if (
-                not tried_fresh_cdn
-                and is_public_https_url(fetch_url)
-                and last_status in (401, 403, 404)
-            ):
-                tried_fresh_cdn = True
-                fresh = _cdn_url(force=True)
-                if fresh and fresh not in seen:
-                    # 插到下一轮：把 fresh 放进 candidates 剩余部分开头
-                    rest = [(fresh, light_ua)]
-                    # 已在循环中，直接把剩余候选前置不好改；这里同步再试一次
-                    try:
-                        client, upstream = await _open_upstream(
-                            fresh, {**upstream_headers, "User-Agent": light_ua}
-                        )
-                        if upstream.status_code < 400:
-                            gateway_err = None
-                            used_fetch = fresh
-                            seen.add(fresh)
-                            break
-                        try:
-                            await upstream.aread()
-                        except Exception:
-                            pass
-                        await upstream.aclose()
-                        await client.aclose()
-                        client = upstream = None
-                    except Exception as e:
-                        gateway_err = e
-                        client = upstream = None
 
         if upstream is None or client is None:
             port = urlparse(raw).port or 80
-            rw = rewrite_target(request) or "(未配置)"
+            rw = target or "(未配置)"
+            tip = ""
+            if proxy_play_urls:
+                tip = f" 已尝试视频代理: {proxy_play_urls[0][:90]}"
             if is_private_or_loopback_host(raw_host):
                 raise HTTPException(
                     502,
                     f"无法连接 115 播放网关/CDN（Connection refused / HTTP {last_status or 'n/a'}）。"
                     f"STRM={raw_host}:{port}，rewrite_to={rw}。"
-                    f"请确认设备代理口（常见 11500，不是 STRM 里的 12366）并在设置里填写 IP:端口。"
+                    f"请确认本机 115 视频代理（常见 :11500，路径 /play/pickcode/文件名）在运行。"
+                    + tip
                     + (f" 详情: {gateway_err}" if gateway_err else ""),
                 )
             raise HTTPException(502, f"上游媒体不可用: {gateway_err}")

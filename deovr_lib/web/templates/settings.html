@@ -26,9 +26,10 @@
   <section class="settings-panel">
     <h2 class="settings-h2">① 115 本地播放 / 网关</h2>
     <p class="hint">
-      STRM 里常见 <code>http://127.0.0.1:12366/play115/…</code>，但不少设备<strong>代理口是 11500</strong>（与 STRM 端口可能不同）。
-      请把「网关指向」填成<strong>实际跑 115 的那台机器</strong>：<code>IP:11500</code>。<br />
-      例：<code>192.168.0.40:11500</code>。<code>/play</code> 会优先 CDN，过期后再试该网关（并自动试 11500/12366）。
+      STRM 常是 <code>/play115/…</code>（旧口 12366）。本机若开的是「115视频代理」端口 <strong>11500</strong>，实际路径是
+      <code>/play/&#123;pickcode&#125;/文件名</code>——服务会自动转换。<br />
+      「网关指向」填跑 115 的机器，例 <code>127.0.0.1:11500</code> 或 <code>192.168.0.32:11500</code>。
+      快进时优先经该代理跟跳（CDN 直打轻量 UA 会 403）。
     </p>
 
     <div class="gateway-settings" id="gateway-settings">

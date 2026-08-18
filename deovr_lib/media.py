@@ -187,6 +187,79 @@ def gateway_url_variants(
     return out
 
 
+def parse_play115(url: str) -> tuple[str, str] | None:
+    """从 Emby/Jellyfin ``/play115/{pickcode}/.../[file]`` 取出 pickcode 与文件名。"""
+    if not url:
+        return None
+    p = urlparse(url)
+    parts = [x for x in p.path.split("/") if x]
+    if len(parts) < 2 or parts[0].lower() != "play115":
+        return None
+    pickcode = parts[1].strip()
+    if not pickcode:
+        return None
+    last = parts[-1]
+    if "." in last and not last.isdigit():
+        fname = last
+    else:
+        fname = f"{pickcode}.mp4"
+    return pickcode, fname
+
+
+def play115_proxy_urls(url: str, bases: list[str]) -> list[str]:
+    """把 play115 STRM 转成「115视频代理」``/play/{pickcode}/{file_name}``。
+
+    本机 11500 端口的 uvicorn 服务走这套路径；原 ``/play115/...`` 会 404。
+    """
+    from urllib.parse import quote
+
+    parsed = parse_play115(url)
+    if not parsed:
+        return []
+    pickcode, fname = parsed
+    out: list[str] = []
+    seen: set[str] = set()
+    for base in bases:
+        b = (base or "").strip().rstrip("/")
+        if not b:
+            continue
+        if "://" not in b:
+            b = f"http://{b}"
+        u = f"{b}/play/{quote(pickcode, safe='')}/{quote(fname, safe='')}"
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def local_115_proxy_bases(lan_host: str = "") -> list[str]:
+    """服务端上游优先打本机 115 视频代理，再打 rewrite_to。"""
+    bases: list[str] = []
+    seen: set[str] = set()
+
+    def add(host: str, port: int) -> None:
+        h = (host or "").strip()
+        if not h:
+            return
+        b = f"http://{h}:{int(port)}"
+        if b not in seen:
+            seen.add(b)
+            bases.append(b)
+
+    # 本机 115-Desktop 视频代理（实测监听 *:11500）
+    for port in COMMON_115_GATEWAY_PORTS:
+        add("127.0.0.1", port)
+    host, port = parse_rewrite_target(lan_host)
+    if host and not _is_loopback_host(host):
+        if port is not None:
+            add(host, port)
+        for p in COMMON_115_GATEWAY_PORTS:
+            add(host, p)
+    elif host and port is not None:
+        add(host, port)
+    return bases
+
+
 def _follow_once(url: str, timeout: float = 10.0) -> tuple[str, int | None]:
     req = urllib.request.Request(
         url,
